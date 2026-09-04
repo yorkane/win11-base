@@ -1,0 +1,39 @@
+# Boot a fresh Windows 11 from ghcr.io/yorkane/win11-base (no installer, straight to desktop).
+# All credentials come from .env next to this file: cp .env.example .env, then edit.
+#   docker compose -f docker-compose.base.yml up -d
+name: win11-base
+services:
+  windows:
+    image: ghcr.io/yorkane/win11-base:latest
+    container_name: ${WIN11_CONTAINER_NAME:-win11}
+    hostname: ${WIN11_CONTAINER_NAME:-win11}
+    environment:
+      RAM_SIZE: "${WIN11_RAM_SIZE:-4G}"
+      CPU_CORES: "${WIN11_CPU_CORES:-4}"
+      DISK_SIZE: "${WIN11_DISK_SIZE:-64G}"
+      # Applied inside the guest at startup by the image's injector.
+      WIN11_USER: "${WIN11_USER:?set WIN11_USER in .env}"
+      WIN11_PASSWORD: "${WIN11_PASSWORD:?set WIN11_PASSWORD in .env}"
+      WIN11_INIT_USER: "${WIN11_INIT_USER:-aigc}"
+      WIN11_INIT_PASSWORD: "${WIN11_INIT_PASSWORD:-aigc}"
+      WIN11_KMS: "${WIN11_KMS:-}"
+      WIN11_KMS_KEY: "${WIN11_KMS_KEY:-}"
+      WIN11_GUEST_IP: "${WIN11_GUEST_IP:-}"
+      WIN11_INJECT_TIMEOUT: "${WIN11_INJECT_TIMEOUT:-900}"
+    devices: [/dev/kvm, /dev/net/tun]
+    cap_add: [NET_ADMIN]
+    ports:
+      - "${WIN11_PORT_VNC:-8006}:8006"      # noVNC
+      - "${WIN11_PORT_RDP:-3389}:3389/tcp"   # RDP
+      - "${WIN11_PORT_RDP:-3389}:3389/udp"
+      - "${WIN11_PORT_SSH:-2222}:22"         # SSH, lands in PowerShell
+    volumes:
+      # Seeded disk is copied into this volume on first use.
+      - win11-storage:/storage
+    restart: unless-stopped
+    # Force-killing Windows can corrupt NTFS; give it time to shut down.
+    stop_grace_period: 2m
+    healthcheck:
+      disable: true
+volumes:
+  win11-storage:

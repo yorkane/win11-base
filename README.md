@@ -3,7 +3,7 @@
 A boot-ready Windows 11 image built on [dockurr/windows](https://github.com/dockur/windows):
 the installed disk is baked into the image, so a new container boots straight to the
 desktop instead of running setup. Account name, password and KMS host are injected at
-`docker run` time and are not part of the image.
+run time from your local `.env` and are not part of the image.
 
 ## What is inside
 
@@ -14,30 +14,48 @@ desktop instead of running setup. Account name, password and KMS host are inject
 - `C:\activate.bat` for re-activation; no third-party software
 - Page file, swap file and hibernation off; disk cleaned and free space zero-filled
 
-## Usage
+## Quick start
 
-```bash
-docker run -d --name win11 --device /dev/kvm --device /dev/net/tun --cap-add NET_ADMIN \
-  -p 127.0.0.1:8006:8006 -p 127.0.0.1:3389:3389 -p 127.0.0.1:2222:22 \
-  -e WIN11_USER=operator -e WIN11_PASSWORD='ChangeMe-2026' \
-  -e WIN11_KMS=kms.example.com:1688 -e WIN11_KMS_KEY=xxxxx \
-  --stop-grace-period 120s \
-  ghcr.io/yorkane/win11-base:latest
-```
+    cp .env.example .env      # fill in real values
+    chmod 600 .env
+    docker compose -f docker-compose.base.yml up -d
+
+Then wait for the guest to come up (about a minute on a fresh volume) and connect:
+
+    ssh <WIN11_USER>@127.0.0.1 -p <WIN11_PORT_SSH>     # lands in PowerShell
+
+Prefer `docker run`? Pass the same variables with `-e`, or keep them in a file and use
+`--env-file` (one `KEY=VALUE` per line, no shell syntax):
+
+    docker run -d --name win11 --device /dev/kvm --device /dev/net/tun --cap-add NET_ADMIN \
+      -p 127.0.0.1:8006:8006 -p 127.0.0.1:3389:3389 -p 127.0.0.1:2222:22 \
+      --env-file .env --stop-grace-period 120s \
+      ghcr.io/yorkane/win11-base:latest
+
+## Secrets: `.env` only
+
+No credential lives in the image, the Dockerfile or the compose file. `docker compose`
+reads `.env` from the project directory automatically. Commit `.env.example` (placeholders
+only); `.gitignore` keeps the real `.env` out of git. Give it mode 600.
 
 | Variable | Meaning |
 | --- | --- |
 | `WIN11_USER` | local account name (renames the account on the disk) |
-| `WIN11_PASSWORD` | local account password |
-| `WIN11_KMS` | KMS `host[:port]` to activate against |
+| `WIN11_PASSWORD` | local account password (**required**) |
+| `WIN11_KMS` | KMS `host[:port]` to activate against; empty disables activation |
 | `WIN11_KMS_KEY` | optional KMS client key (GVLK) for that host |
-| `WIN11_INIT_USER` / `WIN11_INIT_PASSWORD` | credential currently on the disk, defaults `aigc`/`aigc` |
+| `WIN11_INIT_USER` / `WIN11_INIT_PASSWORD` | credential currently on the disk, default `aigc`/`aigc` |
 | `WIN11_GUEST_IP` | skip guest discovery and use this address |
 | `WIN11_INJECT_TIMEOUT` | seconds to wait for the guest, default 900 |
+| `WIN11_RAM_SIZE` / `WIN11_CPU_CORES` / `WIN11_DISK_SIZE` | VM sizing |
+| `WIN11_PORT_VNC` / `WIN11_PORT_RDP` / `WIN11_PORT_SSH` | published host ports |
+| `WIN11_CONTAINER_NAME` | container name and hostname |
 
-Ports: 8006 noVNC, 3389 RDP, 22 SSH. Publish them to free host ports; host 22 is usually
-taken. `/storage` is a volume, so the baked disk is copied into a fresh volume on first
-use; mount a host directory there only if you want state to survive the container.
+The compose file marks `WIN11_USER` and `WIN11_PASSWORD` as required, so a missing `.env`
+fails immediately instead of booting a machine on the public initial password.
+
+Rotate later: edit `.env`, then
+`docker compose -f docker-compose.base.yml up -d --force-recreate`.
 
 ## How injection works
 
@@ -52,10 +70,6 @@ requested state, nothing changes and the guest is not rebooted.
 **Always set `WIN11_USER` and `WIN11_PASSWORD`.** Without them the machine stays on the
 public initial credential, and anyone who can reach port 22 or RDP has the password.
 
-```bash
-ssh operator@127.0.0.1 -p 2222        # lands in PowerShell
-```
-
 ## Size
 
 About 5.6 GB compressed: 569 MB of dockur base plus a 4.99 GB compressed qcow2 holding
@@ -67,8 +81,10 @@ About 5.6 GB compressed: 569 MB of dockur base plus a 4.99 GB compressed qcow2 h
   volume is fine; cloning and rewriting the MAC is not.
 - KMS renewal needs outbound network; if the license ever lapses, run `C:\activate.bat`.
 - Force-killing the container can corrupt NTFS. Allow the 2 minute grace period.
-- First boot on a fresh volume needs about a minute for the guest to come up before SSH
-  answers; the injector waits for it, so a slow start is normal.
+- `/storage` is a volume: the baked disk is copied into a fresh volume on first use. Mount
+  a host directory there only if you want state to survive the container.
+- First boot on a fresh volume needs about a minute before SSH answers; the injector waits
+  for it, so a slow start is normal.
 
 ## Credits
 
