@@ -1,0 +1,2 @@
+# The installed disk never goes through git; it ships inside the published image.
+seed/

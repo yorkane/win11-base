@@ -75,6 +75,35 @@ public initial credential, and anyone who can reach port 22 or RDP has the passw
 About 5.6 GB compressed: 569 MB of dockur base plus a 4.99 GB compressed qcow2 holding
 9.4 GB of used NTFS.
 
+## Repository layout
+
+    .env.example              credentials template (the real .env stays local, mode 600)
+    docker-compose.base.yml   run this; wires every variable into the container
+    image/Dockerfile          dockurr/windows + injector + seeded disk
+    image/win11-inject.sh     the startup injector (rename, password, KMS, auto-logon)
+    image/start.sh            replaces /run/start.sh, the hook dockur invites you to override
+    image/.dockerignore       keeps the disk out of the build context
+
+`image/win11-inject.sh` and `image/start.sh` in this repository are byte-identical to the files
+inside the published image (`md5sum /usr/local/bin/win11-inject /run/start.sh`). Read them before
+you point this image at a network you do not control.
+
+## Building
+
+Only the disk is missing from git: `image/seed/` (a ~5 GB compressed qcow2) ships through the
+image, not the repository. A clone gives you the injector and the Dockerfile, not a bootable
+image. Two options:
+
+- Use the published image. That is the supported path; nothing to build.
+- Build your own: install Windows once with upstream `dockurr/windows` (your own ISO and
+  account), let it finish, shut it down gracefully, then point `image/Dockerfile` at that
+  `/storage` directory as the seed. Keep the `windows.*` state files, especially
+  `windows.boot` -- without it the container decides Windows was never installed and reinstalls.
+  Put `COPY seed/` first in the Dockerfile and the thin injector layers last, so editing the
+  injector does not re-transfer 5 GB on push.
+
+    docker build -t win11-base image
+
 ## Caveats
 
 - Activation is tied to the sealed disk and the MAC address baked into it. Cloning the
