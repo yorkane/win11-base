@@ -10,7 +10,9 @@ run time from your local `.env` and are not part of the image.
 - Tiny11 Core 25H2 English (Windows 11 Pro), KMS-activated, renews every 7 days online
 - One local administrator account, SSH shell is PowerShell
 - OpenSSH Server (Microsoft portable build) on port 22, `sshd` = Running/Automatic
-- Solid black desktop: no wallpaper files, no lock-screen image
+-- Solid black desktop: no wallpaper files, no lock-screen image, no desktop icons,
+   and the taskbar auto-hides (re-applied at every logon by the `w11DeskHide` task;
+   set `WIN11_DESKTOP=off` to keep the stock desktop)
 - `C:\activate.bat` for re-activation; no third-party software
 - Page file, swap file and hibernation off; disk cleaned and free space zero-filled
 
@@ -47,6 +49,7 @@ only); `.gitignore` keeps the real `.env` out of git. Give it mode 600.
 | `WIN11_INIT_USER` / `WIN11_INIT_PASSWORD` | credential currently on the disk, default `aigc`/`aigc` |
 | `WIN11_GUEST_IP` | skip guest discovery and use this address |
 | `WIN11_INJECT_TIMEOUT` | seconds to wait for the guest, default 900 |
+| `WIN11_DESKTOP` | `off` keeps the stock desktop; default applies black background, no icons, auto-hidden taskbar |
 | `WIN11_RAM_SIZE` / `WIN11_CPU_CORES` / `WIN11_DISK_SIZE` | VM sizing |
 | `WIN11_PORT_VNC` / `WIN11_PORT_RDP` / `WIN11_PORT_SSH` | published host ports |
 | `WIN11_CONTAINER_NAME` | container name and hostname |

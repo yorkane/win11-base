@@ -18,6 +18,8 @@ services:
       WIN11_INIT_PASSWORD: "${WIN11_INIT_PASSWORD:-aigc}"
       WIN11_KMS: "${WIN11_KMS:-}"
       WIN11_KMS_KEY: "${WIN11_KMS_KEY:-}"
+      # Desktop look: black, no icons, taskbar auto-hidden. off = keep stock desktop.
+      WIN11_DESKTOP: "${WIN11_DESKTOP:-on}"
       WIN11_GUEST_IP: "${WIN11_GUEST_IP:-}"
       WIN11_INJECT_TIMEOUT: "${WIN11_INJECT_TIMEOUT:-900}"
     devices: [/dev/kvm, /dev/net/tun]

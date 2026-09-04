@@ -12,6 +12,7 @@
 #   WIN11_INIT_PASSWORD  password currently on the disk (default: aigc)
 #   WIN11_GUEST_IP       skip discovery and use this address
 #   WIN11_INJECT_TIMEOUT seconds to wait for the guest (default: 900)
+#   WIN11_DESKTOP        off -> keep the stock desktop (icons + taskbar visible)
 #
 # The sealed disk carries a well-known initial credential, exactly like dockur ships
 # admin/admin: its only job is to let this script rotate it on first boot.
@@ -29,10 +30,9 @@ TIMEOUT="${WIN11_INJECT_TIMEOUT:-900}"
 
 say() { printf '> win11-inject: %s\n' "$1"; }
 
-if [ -z "$DESIRED_USER" ] && [ -z "$DESIRED_PASSWORD" ] && [ -z "$KMS_HOST" ]; then
-  say "nothing to inject (set WIN11_USER / WIN11_PASSWORD / WIN11_KMS)"
-  exit 0
-fi
+# The desktop look (black background, no icons, auto-hidden taskbar) is applied on
+# every start unless the deployer opts out; credentials and KMS stay opt-in.
+DESKTOP="${WIN11_DESKTOP:-on}"
 
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 SSH_OPTS="$SSH_OPTS -o ConnectTimeout=10 -o PreferredAuthentications=password"
@@ -237,6 +237,43 @@ fi
 if [ "$CHANGED" -eq 1 ]; then
   say "rebooting the guest so auto-logon uses the new credential"
   ps_run "$CUR_USER" "$CUR_PASS" "$IP" 'shutdown /r /t 5 /f' >/dev/null 2>&1
+fi
+
+# ---------------------------------------------------------------- desktop look
+# Black background, no desktop icons, taskbar auto-hidden. Two of the three are plain
+# HKCU registry values and stick forever; the taskbar switch exists only as runtime
+# state on this build (the StuckRects3 registry route is measurably dead), so it has
+# to be replayed after every boot by a logon task. Both scripts therefore run from
+# one Interactive/Highest task in the console session: SYSTEM and sshd children live
+# in session 0, where FindWindow('Shell_TrayWnd') returns 0 and the call no-ops.
+if [ "$DESKTOP" != "off" ]; then
+  say "applying desktop look (black, no icons, taskbar auto-hide)"
+  push_asset() {
+    local name="$1" b64 script out
+    b64=$(base64 < "/usr/local/share/win11/$name" | tr -d '\n')
+    script="[IO.File]::WriteAllBytes('C:\\ProgramData\\w11\\$name',[Convert]::FromBase64String('$b64')); if (Test-Path 'C:\\ProgramData\\w11\\$name') { Write-Output PUSH_OK }"
+    out=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" "$script")
+    printf '%s' "$out" | grep -q 'PUSH_OK' || { say "ERROR: could not stage $name"; exit 1; }
+  }
+  ps_run "$CUR_USER" "$CUR_PASS" "$IP" 'New-Item -ItemType Directory -Path C:\ProgramData\w11 -Force | Out-Null; Write-Output DIR_OK' >/dev/null
+  push_asset w11_desktop.ps1
+  push_asset tb_ensure_hidden.ps1
+
+  # cmd wrapper + bat so the task leaves a log behind; the bat is echoed back because a
+  # mangled bat silently loses arguments in this stack (WeChat install incident).
+  desk_script='$d="C:\ProgramData\w11"; $b=$d+"\deskhide.bat"; $l=$d+"\deskhide.log"; $s=@(); $s+=("@echo off"); $s+=("powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File " + $d + "\w11_desktop.ps1 > " + $l + " 2>&1"); $s+=("powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File " + $d + "\tb_ensure_hidden.ps1 >> " + $l + " 2>&1"); $s+=("echo DONE_EXIT=%ERRORLEVEL% >> " + $l); Set-Content -Path $b -Value $s -Encoding ASCII; Get-Content $b | ForEach-Object { Write-Output ("BATHASH[" + $_ + "]") }; Write-Output BAT_OK'
+  out=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" "$desk_script")
+  printf '%s' "$out" | grep -q 'BAT_OK' || { say "ERROR: deskhide.bat not written"; exit 1; }
+  printf '%s' "$out" | tr -d '\r' | grep -o 'BATHASH\[.*\]' | while read -r l; do say "  $l"; done
+
+  desk_script='$null = Register-ScheduledTask -TaskName w11DeskHide -Action (New-ScheduledTaskAction -Execute cmd.exe -Argument "/c C:\ProgramData\w11\deskhide.bat") -Principal (New-ScheduledTaskPrincipal -UserId '$(psq "$CUR_USER")' -LogonType Interactive -RunLevel Highest) -Trigger (New-ScheduledTaskTrigger -AtLogOn -User '$(psq "$CUR_USER")') -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 15)) -Force -ErrorAction Stop; $x = Get-ScheduledTask -TaskName w11DeskHide; Write-Output ("TASK=" + $x.TaskName + " " + $x.Principal.UserId + "/" + $x.Principal.LogonType + "/" + $x.Principal.RunLevel); Start-ScheduledTask -TaskName w11DeskHide; Write-Output TASK_STARTED'
+  out=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" "$desk_script")
+  if printf '%s' "$out" | grep -q 'TASK_STARTED'; then
+    say "$(printf '%s' "$out" | tr -d '\r' | grep -o 'TASK=.*' | head -1)"
+    APPLIED="$APPLIED desktop"
+  else
+    say "WARNING: logon task not registered: $(printf '%s' "$out" | tr '\n' ' ')"
+  fi
 fi
 
 say "done (applied:$APPLIED)"

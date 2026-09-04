@@ -9,6 +9,9 @@ FROM dockurr/windows:latest
 
 COPY seed/ /storage/
 COPY win11-inject.sh /usr/local/bin/win11-inject
+# Guest-side assets the injector pushes into C:\ProgramData\w11 at every start:
+# the desktop-look pass and the measured taskbar ladder (see win11_init.md).
+COPY w11_desktop.ps1 tb_ensure_hidden.ps1 /usr/local/share/win11/
 # dockur sources /run/start.sh as its very first action inside /run/entry.sh and invites
 # exactly this override. The hook detaches the injector, so Windows boots in parallel with
 # the wait loop instead of being delayed by it.
