@@ -13,7 +13,10 @@ run time from your local `.env` and are not part of the image.
 -- Solid black desktop: no wallpaper files, no lock-screen image, no desktop icons,
    and the taskbar auto-hides (re-applied at every logon by the `w11DeskHide` task;
    set `WIN11_DESKTOP=off` to keep the stock desktop)
-- `C:\activate.bat` for re-activation; no third-party software
+- `C:\activate.bat` for re-activation; no third-party software installed (the window API
+  below runs on a self-contained `node.exe` inside `C:\mspc`, not an installed runtime)
+- Optional window-level AI API (midscene-pc): HTTP on guest `:3333`, started as the
+  `mspcServer` logon task, reachable through the published port when a token is set
 - Page file, swap file and hibernation off; disk cleaned and free space zero-filled
 
 ## Quick start
@@ -25,6 +28,14 @@ run time from your local `.env` and are not part of the image.
 Then wait for the guest to come up (about a minute on a fresh volume) and connect:
 
     ssh <WIN11_USER>@127.0.0.1 -p <WIN11_PORT_SSH>     # lands in PowerShell
+
+With `WIN11_MSPC_TOKEN` set in `.env`, the window API answers once the guest is up:
+
+    curl "http://127.0.0.1:<WIN11_PORT_MSPC>/api/windows?token=<WIN11_MSPC_TOKEN>"
+
+The token travels as a query parameter (that is what the server checks; a wrong or
+missing token gets HTTP 401). Endpoints include `/api/windows`, window focus/minimize/
+close, screenshots, and AI actions when a gateway is configured.
 
 Prefer `docker run`? Pass the same variables with `-e`, or keep them in a file and use
 `--env-file` (one `KEY=VALUE` per line, no shell syntax):
@@ -51,7 +62,10 @@ only); `.gitignore` keeps the real `.env` out of git. Give it mode 600.
 | `WIN11_INJECT_TIMEOUT` | seconds to wait for the guest, default 900 |
 | `WIN11_DESKTOP` | `off` keeps the stock desktop; default applies black background, no icons, auto-hidden taskbar |
 | `WIN11_RAM_SIZE` / `WIN11_CPU_CORES` / `WIN11_DISK_SIZE` | VM sizing |
-| `WIN11_PORT_VNC` / `WIN11_PORT_RDP` / `WIN11_PORT_SSH` | published host ports |
+| `WIN11_MSPC` | `off` skips the window API; default deploys it (adds ~80 MB to the image, unpacked on first boot) |
+| `WIN11_MSPC_TOKEN` | API bearer token; **empty binds the API to guest loopback only** |
+| `WIN11_MSPC_GATEWAY` / `WIN11_MSPC_MODEL_KEY` / `WIN11_MSPC_MODEL` / `WIN11_MSPC_FAMILY` | optional OpenAI-compatible gateway for the AI endpoints; window APIs work without them |
+| `WIN11_PORT_VNC` / `WIN11_PORT_RDP` / `WIN11_PORT_SSH` / `WIN11_PORT_MSPC` | published host ports |
 | `WIN11_CONTAINER_NAME` | container name and hostname |
 
 The compose file marks `WIN11_USER` and `WIN11_PASSWORD` as required, so a missing `.env`

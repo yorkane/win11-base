@@ -1,0 +1,9 @@
+{
+  "tar": "C:\\ProgramData\\w11\\mspc-payload.tar.gz",
+  "version": "__VERSION__",
+  "token": "__TOKEN__",
+  "gateway": "__GATEWAY__",
+  "key": "__KEY__",
+  "model": "__MODEL__",
+  "family": "__FAMILY__"
+}

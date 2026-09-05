@@ -1,2 +1,5 @@
 .env
 *.log
+
+# Regenerable from a live VM via scripts/mspc_build_payload.ps1; it ships inside the published image, not through git.
+image/mspc/*.tar.gz

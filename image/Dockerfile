@@ -8,10 +8,15 @@
 FROM dockurr/windows:latest
 
 COPY seed/ /storage/
+# midscene-pc payload (~80 MB): node.exe + win32 node_modules + dist, packed FROM A LIVE
+# VM (win32 binaries cannot be reinstalled from this Linux image). Right after the seed
+# so edits to the scripts below never re-transfer it.
+COPY mspc/mspc-payload.tar.gz /usr/local/share/win11/mspc-payload.tar.gz
 COPY win11-inject.sh /usr/local/bin/win11-inject
 # Guest-side assets the injector pushes into C:\ProgramData\w11 at every start:
 # the desktop-look pass and the measured taskbar ladder (see win11_init.md).
-COPY w11_desktop.ps1 tb_ensure_hidden.ps1 /usr/local/share/win11/
+# w11_mspc.ps1 + its JSON template configure the midscene-pc API server in the guest.
+COPY w11_desktop.ps1 tb_ensure_hidden.ps1 w11_mspc.ps1 mspc-args.json.template /usr/local/share/win11/
 # dockur sources /run/start.sh as its very first action inside /run/entry.sh and invites
 # exactly this override. The hook detaches the injector, so Windows boots in parallel with
 # the wait loop instead of being delayed by it.

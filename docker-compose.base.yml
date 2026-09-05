@@ -1,39 +1,46 @@
-# Boot a fresh Windows 11 from ghcr.io/yorkane/win11-base (no installer, straight to desktop).
-# All credentials come from .env next to this file: cp .env.example .env, then edit.
-#   docker compose -f docker-compose.base.yml up -d
+# 用 ghcr.io/yorkane/win11-base:latest 起一台干净的 Win11（直接进桌面，不重装）。
+# 密钥全部来自同目录 .env（cp .env.example .env 后填写）；.env 不入库。
+# 用法：docker compose -f docker-compose.base.yml up -d
 name: win11-base
 services:
   windows:
     image: ghcr.io/yorkane/win11-base:latest
-    container_name: ${WIN11_CONTAINER_NAME:-win11}
-    hostname: ${WIN11_CONTAINER_NAME:-win11}
+    container_name: ${WIN11_CONTAINER_NAME:-win11-base}
+    hostname: ${WIN11_CONTAINER_NAME:-win11-base}
     environment:
       RAM_SIZE: "${WIN11_RAM_SIZE:-4G}"
       CPU_CORES: "${WIN11_CPU_CORES:-4}"
       DISK_SIZE: "${WIN11_DISK_SIZE:-64G}"
-      # Applied inside the guest at startup by the image's injector.
+      # 部署时注入：guest 启动后由 win11-inject 通过 SSH 应用这些值
       WIN11_USER: "${WIN11_USER:?set WIN11_USER in .env}"
       WIN11_PASSWORD: "${WIN11_PASSWORD:?set WIN11_PASSWORD in .env}"
       WIN11_INIT_USER: "${WIN11_INIT_USER:-aigc}"
       WIN11_INIT_PASSWORD: "${WIN11_INIT_PASSWORD:-aigc}"
       WIN11_KMS: "${WIN11_KMS:-}"
       WIN11_KMS_KEY: "${WIN11_KMS_KEY:-}"
-      # Desktop look: black, no icons, taskbar auto-hidden. off = keep stock desktop.
-      WIN11_DESKTOP: "${WIN11_DESKTOP:-on}"
       WIN11_GUEST_IP: "${WIN11_GUEST_IP:-}"
       WIN11_INJECT_TIMEOUT: "${WIN11_INJECT_TIMEOUT:-900}"
+      # 桌面形态：纯黑+无图标+任务栏自动隐藏；off 保持原样
+      WIN11_DESKTOP: "${WIN11_DESKTOP:-on}"
+      # midscene-pc 窗口级 AI API（guest :3333）；WIN11_MSPC=off 关闭
+      WIN11_MSPC: "${WIN11_MSPC:-on}"
+      WIN11_MSPC_TOKEN: "${WIN11_MSPC_TOKEN:-}"
+      WIN11_MSPC_GATEWAY: "${WIN11_MSPC_GATEWAY:-}"
+      WIN11_MSPC_MODEL_KEY: "${WIN11_MSPC_MODEL_KEY:-}"
+      WIN11_MSPC_MODEL: "${WIN11_MSPC_MODEL:-gpt-5.6-luna}"
+      WIN11_MSPC_FAMILY: "${WIN11_MSPC_FAMILY:-gpt-5}"
     devices: [/dev/kvm, /dev/net/tun]
     cap_add: [NET_ADMIN]
     ports:
       - "${WIN11_PORT_VNC:-8006}:8006"      # noVNC
       - "${WIN11_PORT_RDP:-3389}:3389/tcp"   # RDP
       - "${WIN11_PORT_RDP:-3389}:3389/udp"
-      - "${WIN11_PORT_SSH:-2222}:22"         # SSH, lands in PowerShell
+      - "${WIN11_PORT_SSH:-2222}:22"         # SSH -> PowerShell
+      - "${WIN11_PORT_MSPC:-3333}:3333"       # midscene-pc API (dockur NAT forwards to guest)
     volumes:
-      # Seeded disk is copied into this volume on first use.
-      - win11-storage:/storage
+      - win11-storage:/storage   # 种子盘首次使用时复制进卷；换目录挂载可持久化
+      - /etc/localtime:/etc/localtime:ro
     restart: unless-stopped
-    # Force-killing Windows can corrupt NTFS; give it time to shut down.
     stop_grace_period: 2m
     healthcheck:
       disable: true

@@ -13,6 +13,10 @@
 #   WIN11_GUEST_IP       skip discovery and use this address
 #   WIN11_INJECT_TIMEOUT seconds to wait for the guest (default: 900)
 #   WIN11_DESKTOP        off -> keep the stock desktop (icons + taskbar visible)
+#   WIN11_MSPC           off -> skip the midscene-pc API server (default: on if payload present)
+#   WIN11_MSPC_TOKEN     token for the API on :3333. Empty = bind guest loopback only.
+#   WIN11_MSPC_GATEWAY / WIN11_MSPC_MODEL_KEY / WIN11_MSPC_MODEL / WIN11_MSPC_FAMILY
+#                        model backend for AI endpoints (window APIs need none of these)
 #
 # The sealed disk carries a well-known initial credential, exactly like dockur ships
 # admin/admin: its only job is to let this script rotate it on first boot.
@@ -33,6 +37,12 @@ say() { printf '> win11-inject: %s\n' "$1"; }
 # The desktop look (black background, no icons, auto-hidden taskbar) is applied on
 # every start unless the deployer opts out; credentials and KMS stay opt-in.
 DESKTOP="${WIN11_DESKTOP:-on}"
+MSPC="${WIN11_MSPC:-on}"
+MSPC_TOKEN="${WIN11_MSPC_TOKEN:-}"
+MSPC_GATEWAY="${WIN11_MSPC_GATEWAY:-}"
+MSPC_MODEL_KEY="${WIN11_MSPC_MODEL_KEY:-}"
+MSPC_MODEL="${WIN11_MSPC_MODEL:-gpt-5.6-luna}"
+MSPC_FAMILY="${WIN11_MSPC_FAMILY:-gpt-5}"
 
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 SSH_OPTS="$SSH_OPTS -o ConnectTimeout=10 -o PreferredAuthentications=password"
@@ -145,6 +155,17 @@ psq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"; }
 CHANGED=0
 APPLIED=""
 
+# Copy a file from /usr/local/share/win11 into the guest as C:\\ProgramData\\w11\\<name>.
+# Base64-inlined into a PowerShell one-liner: same SSH channel as everything else,
+# no SMB/SCP assumptions, immune to the escaping stack.
+push_asset() {
+  local name="$1" b64 script out
+  b64=$(base64 < "/usr/local/share/win11/$name" | tr -d '\n')
+  script="[IO.File]::WriteAllBytes('C:\\ProgramData\\w11\\$name',[Convert]::FromBase64String('$b64')); if (Test-Path 'C:\\ProgramData\\w11\\$name') { Write-Output PUSH_OK }"
+  out=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" "$script")
+  printf '%s' "$out" | grep -q 'PUSH_OK' || { say "ERROR: could not stage $name"; exit 1; }
+}
+
 # ---------------------------------------------------------------- account name
 if [ -n "$DESIRED_USER" ] && [ "$DESIRED_USER" != "$CUR_USER" ]; then
   say "renaming account $CUR_USER -> $DESIRED_USER"
@@ -233,11 +254,8 @@ if [ -n "$KMS_HOST" ]; then
   printf '%s' "$out" | grep -q 'BAT_OK' && say "refreshed C:\\activate.bat"
 fi
 
-# ---------------------------------------------------------------- reboot once
-if [ "$CHANGED" -eq 1 ]; then
-  say "rebooting the guest so auto-logon uses the new credential"
-  ps_run "$CUR_USER" "$CUR_PASS" "$IP" 'shutdown /r /t 5 /f' >/dev/null 2>&1
-fi
+# (The reboot moved to the very end of the script: rebooting mid-way used to interrupt
+#  the desktop/mspc pushes below.)
 
 # ---------------------------------------------------------------- desktop look
 # Black background, no desktop icons, taskbar auto-hidden. Two of the three are plain
@@ -248,13 +266,6 @@ fi
 # in session 0, where FindWindow('Shell_TrayWnd') returns 0 and the call no-ops.
 if [ "$DESKTOP" != "off" ]; then
   say "applying desktop look (black, no icons, taskbar auto-hide)"
-  push_asset() {
-    local name="$1" b64 script out
-    b64=$(base64 < "/usr/local/share/win11/$name" | tr -d '\n')
-    script="[IO.File]::WriteAllBytes('C:\\ProgramData\\w11\\$name',[Convert]::FromBase64String('$b64')); if (Test-Path 'C:\\ProgramData\\w11\\$name') { Write-Output PUSH_OK }"
-    out=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" "$script")
-    printf '%s' "$out" | grep -q 'PUSH_OK' || { say "ERROR: could not stage $name"; exit 1; }
-  }
   ps_run "$CUR_USER" "$CUR_PASS" "$IP" 'New-Item -ItemType Directory -Path C:\ProgramData\w11 -Force | Out-Null; Write-Output DIR_OK' >/dev/null
   push_asset w11_desktop.ps1
   push_asset tb_ensure_hidden.ps1
@@ -276,5 +287,89 @@ if [ "$DESKTOP" != "off" ]; then
   fi
 fi
 
+# ---------------------------------------------------------------- midscene-pc API server
+# A payload tarball built FROM A LIVE VM (win32 node_modules + node.exe; never npm-install
+# from a Linux image) ships inside the image. The injector pushes it over scp on the same
+# SSH channel, then a one-shot w11Mspc task (Interactive/Highest: the console session is
+# required for window APIs and screenshots) unpacks it, writes C:\mspc\.env from a
+# JSON sidecar, and registers mspcServer (AtLogOn Interactive) as the persistent API host.
+# Values NEVER travel as task arguments: they would have to survive bash -> task XML ->
+# cmd -> PowerShell and corrupt silently (the WeChat bat incident).
+if [ "$MSPC" != "off" ] && [ -f /usr/local/share/win11/mspc-payload.tar.gz ]; then
+  strict WIN11_MSPC_TOKEN "$MSPC_TOKEN" '^[A-Za-z0-9._@-]+$'
+  strict WIN11_MSPC_GATEWAY "$MSPC_GATEWAY" '^[A-Za-z0-9./:_+-]+$'
+  strict WIN11_MSPC_MODEL_KEY "$MSPC_MODEL_KEY" '^[A-Za-z0-9._-]+$'
+  strict WIN11_MSPC_MODEL "$MSPC_MODEL" '^[A-Za-z0-9._-]+$'
+  strict WIN11_MSPC_FAMILY "$MSPC_FAMILY" '^[A-Za-z0-9._-]+$'
+  if [ -n "$MSPC_TOKEN" ]; then say "deploying midscene-pc API (:3333, token-protected)"; else say "deploying midscene-pc API (:3333, no token -> guest loopback only)"; fi
+  MSPC_VERSION=$(sha256sum /usr/local/share/win11/mspc-payload.tar.gz | cut -c1-12)
+  push_asset w11_mspc.ps1
+  # Sidecar carries every injected value; rewritten on every start so a token or gateway
+  # change in .env takes effect without re-pushing the payload.
+  sed -e "s/__VERSION__/$MSPC_VERSION/" -e "s|__TOKEN__|$MSPC_TOKEN|" -e "s|__GATEWAY__|$MSPC_GATEWAY|" \
+      -e "s|__KEY__|$MSPC_MODEL_KEY|" -e "s|__MODEL__|$MSPC_MODEL|" -e "s|__FAMILY__|$MSPC_FAMILY|" \
+    /usr/local/share/win11/mspc-args.json.template > /tmp/mspc-args.json
+  grep -q '__' /tmp/mspc-args.json && { say 'ERROR: mspc template substitution failed'; exit 1; }
+  b64=$(base64 < /tmp/mspc-args.json | tr -d '\n'); rm -f /tmp/mspc-args.json
+  script="[IO.File]::WriteAllBytes('C:\\ProgramData\\w11\\mspc-args.json',[Convert]::FromBase64String('$b64')); Write-Output ARGS_OK"
+  out=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" "$script")
+  printf '%s' "$out" | grep -q ARGS_OK || { say 'ERROR: mspc args sidecar failed'; exit 1; }
+  # Firewall hygiene, run TWICE (here and after the API is up): Windows records a
+  # per-program BLOCK rule the moment node first binds a port in a new guest, and the
+  # seed disk already carries two such rules from win11-en ("Node.js JavaScript
+  # Runtime"). Block beats Allow, so the API is unreachable from outside until they are
+  # gone (found 2026-09-05). The post-UP pass catches rules created by that first bind.
+  mspc_fw_hygiene() {
+  fw="Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { \$_.DisplayName -eq 'Node.js JavaScript Runtime' -and \$_.Action -eq 'Block' } | Remove-NetFirewallRule -ErrorAction SilentlyContinue; if (-not (Get-NetFirewallPortFilter -ErrorAction SilentlyContinue | Where-Object { \$_.LocalPort -eq '3333' } | Select-Object -First 1)) { New-NetFirewallRule -DisplayName 'midscene-pc API' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3333 -Profile Any | Out-Null }; \$b = @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { \$_.Action -eq 'Block' -and \$_.Direction -eq 'Inbound' -and \$_.Enabled -eq 'True' } | Measure-Object).Count; Write-Output ('FWOK blocks=' + \$b)"
+    out=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" "$fw")
+    # Rule COUNTS are noisy (Windows hydrates them lazily around the first bind; a fresh
+    # guest counted 1 here even while the API answered from outside). The only verdict
+    # that matters is reachability, checked after the server is up below.
+    printf '%s' "$out" | grep -q 'FWOK' || say 'WARNING: firewall hygiene did not report'
+  }
+  mspc_fw_hygiene
+  # Push the tarball when the marker differs, or when it matches but the install is
+  # broken (marker written, node.exe gone) -- self-heal instead of a mystery DOWN.
+  have=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" '$m = ""; if (Test-Path "C:\mspc\.mspc-version") { $m = (Get-Content "C:\mspc\.mspc-version" -First 1).Trim() }; $n = Test-Path "C:\mspc\bin\node.exe"; Write-Output ("MARKER=" + $m + " NODE=" + $n)')
+  if printf '%s' "$have" | grep -q "MARKER=$MSPC_VERSION NODE=True"; then
+    say "payload $MSPC_VERSION already on disk (not re-pushed)"
+  else
+    say "pushing mspc payload $MSPC_VERSION (~80 MB, one time) ..."
+    printf '%s' "$CUR_PASS" > /tmp/.mspc_pw; chmod 600 /tmp/.mspc_pw
+    sshpass -f /tmp/.mspc_pw scp -P 22 -q $SSH_OPTS -o StrictHostKeyChecking=no \
+      /usr/local/share/win11/mspc-payload.tar.gz "$CUR_USER@$IP:C:/ProgramData/w11/mspc-payload.tar.gz"
+    scp_rc=$?; rm -f /tmp/.mspc_pw
+    [ $scp_rc -eq 0 ] || { say "ERROR: mspc payload push failed (rc=$scp_rc)"; exit 1; }
+  fi
+  reg='if (Test-Path C:\ProgramData\w11\mspc-deploy.log) { Remove-Item C:\ProgramData\w11\mspc-deploy.log -Force }; $null = Register-ScheduledTask -TaskName w11Mspc -Action (New-ScheduledTaskAction -Execute cmd.exe -Argument "/c powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\w11\w11_mspc.ps1 > C:\ProgramData\w11\mspc-once.log 2>&1") -Principal (New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest) -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10)) -Force; Start-ScheduledTask -TaskName w11Mspc; Write-Output ONESHOT_STARTED'
+  ps_run "$CUR_USER" "$CUR_PASS" "$IP" "$reg" | grep -q ONESHOT_STARTED || { say 'ERROR: mspc deploy task not started'; exit 1; }
+  i=0
+  while [ $i -lt 36 ]; do
+    i=$((i+1)); sleep 5
+    v=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" 'Get-Content C:\ProgramData\w11\mspc-deploy.log -ErrorAction SilentlyContinue | Select-Object -Last 3')
+    if printf '%s' "$v" | grep -q 'MSPC_API=.* UP'; then
+      # The very first bind may have made Windows file a fresh block rule for node.exe;
+      # sweep again now that it exists, then prove the API answers from OUTSIDE the guest
+      # (host-side port-forward is what operators use; a guest-local check would be blind
+      # to exactly the failure this hygiene prevents).
+      mspc_fw_hygiene
+      # Prove the API answers from OUTSIDE the guest: reaching guest:3333 from this
+      # container is the same vantage an operator's port-forward uses, so it catches
+      # exactly the seed-carried block-rule failure.
+      if tcp_open "$IP" 3333; then say 'midscene-pc API up and reachable on :3333'
+      else say 'WARNING: mspc API listening but unreachable through the NAT (firewall?)'; fi
+      APPLIED="$APPLIED mspc"; break
+    fi
+    if printf '%s' "$v" | grep -q 'MSPC_API=DOWN'; then say "WARNING: mspc deployed but API down (see C:\ProgramData\w11\mspc-server.log)"; break; fi
+    if printf '%s' "$v" | grep -q 'ERROR:'; then say "ERROR: mspc deploy failed: $v"; exit 1; fi
+  done
+    ps_run "$CUR_USER" "$CUR_PASS" "$IP" '$null = Unregister-ScheduledTask -TaskName w11Mspc -Confirm:$false' >/dev/null 2>&1
+fi
+
+# ---------------------------------------------------------------- reboot once (last step)
+if [ "$CHANGED" -eq 1 ]; then
+  say "rebooting the guest so auto-logon uses the new credential"
+  ps_run "$CUR_USER" "$CUR_PASS" "$IP" 'shutdown /r /t 5 /f' >/dev/null 2>&1
+fi
 say "done (applied:$APPLIED)"
 exit 0
