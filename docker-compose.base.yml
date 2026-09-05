@@ -22,6 +22,8 @@ services:
       WIN11_INJECT_TIMEOUT: "${WIN11_INJECT_TIMEOUT:-900}"
       # 桌面形态：纯黑+无图标+任务栏自动隐藏；off 保持原样
       WIN11_DESKTOP: "${WIN11_DESKTOP:-on}"
+      # 剪贴板桥：浏览器 noVNC <-> Windows 控制台双向复制粘贴（vdagent）；off 关闭
+      WIN11_CLIP: "${WIN11_CLIP:-on}"
       # midscene-pc 窗口级 AI API（guest :3333）；WIN11_MSPC=off 关闭
       WIN11_MSPC: "${WIN11_MSPC:-on}"
       WIN11_MSPC_TOKEN: "${WIN11_MSPC_TOKEN:-}"

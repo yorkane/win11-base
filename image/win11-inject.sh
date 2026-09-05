@@ -13,6 +13,7 @@
 #   WIN11_GUEST_IP       skip discovery and use this address
 #   WIN11_INJECT_TIMEOUT seconds to wait for the guest (default: 900)
 #   WIN11_DESKTOP        off -> keep the stock desktop (icons + taskbar visible)
+#   WIN11_CLIP           off -> skip the vdagent clipboard bridge (browser <-> guest)
 #   WIN11_MSPC           off -> skip the midscene-pc API server (default: on if payload present)
 #   WIN11_MSPC_TOKEN     token for the API on :3333. Empty = bind guest loopback only.
 #   WIN11_MSPC_GATEWAY / WIN11_MSPC_MODEL_KEY / WIN11_MSPC_MODEL / WIN11_MSPC_FAMILY
@@ -37,6 +38,7 @@ say() { printf '> win11-inject: %s\n' "$1"; }
 # The desktop look (black background, no icons, auto-hidden taskbar) is applied on
 # every start unless the deployer opts out; credentials and KMS stay opt-in.
 DESKTOP="${WIN11_DESKTOP:-on}"
+CLIP="${WIN11_CLIP:-on}"
 MSPC="${WIN11_MSPC:-on}"
 MSPC_TOKEN="${WIN11_MSPC_TOKEN:-}"
 MSPC_GATEWAY="${WIN11_MSPC_GATEWAY:-}"
@@ -287,6 +289,44 @@ if [ "$DESKTOP" != "off" ]; then
   fi
 fi
 
+# ---------------------------------------------------------------- clipboard bridge (vdagent)
+# QEMU already carries the virtio-serial chardev (image/start.sh appends it to ARGUMENTS
+# unless WIN11_CLIP=off). The guest half -- vioserial driver + vdservice/vdagent -- is
+# what this section installs, so the browser noVNC clipboard and the Windows console
+# clipboard become one (bidirectional, UTF-8 clean; protocol proven 2026-09-04, deploy.md 7.3).
+if [ "$CLIP" != "off" ]; then
+  say "installing vdagent guest components (clipboard bridge)"
+  VDA_VERSION=$(sha256sum /usr/local/share/win11/vda-payload.tar.gz | cut -c1-12)
+  push_asset vda_install.ps1
+  have=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" '$m = ""; if (Test-Path "C:\vdagent\.vda-version") { $m = (Get-Content "C:\vdagent\.vda-version" -First 1).Trim() }; $e = Test-Path "C:\vdagent\vdservice.exe"; Write-Output ("MARKER=" + $m + " EXE=" + $e)')
+  if printf '%s' "$have" | grep -q "MARKER=$VDA_VERSION EXE=True"; then
+    say "vdagent payload $VDA_VERSION already on disk"
+  else
+    printf '%s' "$CUR_PASS" > /tmp/.vda_pw; chmod 600 /tmp/.vda_pw
+    sshpass -f /tmp/.vda_pw scp -P 22 -q $SSH_OPTS -o StrictHostKeyChecking=no \
+      /usr/local/share/win11/vda-payload.tar.gz "$CUR_USER@$IP:C:/ProgramData/w11/vda-payload.tar.gz"
+    scp_rc=$?; rm -f /tmp/.vda_pw
+    [ $scp_rc -eq 0 ] || { say "ERROR: vdagent payload push failed (rc=$scp_rc)"; exit 1; }
+  fi
+  # SYSTEM + ServiceAccount: pnputil /install and vdservice registration are denied to
+  # the UAC-filtered SSH/interactive token (the OpenSSH capability lesson again).
+  reg='if (Test-Path C:\ProgramData\w11\vda-install.log) { Remove-Item C:\ProgramData\w11\vda-install.log -Force }; $null = Register-ScheduledTask -TaskName w11Vda -Action (New-ScheduledTaskAction -Execute cmd.exe -Argument "/c powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\w11\vda_install.ps1 > C:\ProgramData\w11\vda-once.log 2>&1") -Principal (New-ScheduledTaskPrincipal -UserId SYSTEM -LogonType ServiceAccount -RunLevel Highest) -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5)) -Force; Start-ScheduledTask -TaskName w11Vda; Write-Output VDA_ONESHOT_STARTED'
+  ps_run "$CUR_USER" "$CUR_PASS" "$IP" "$reg" | grep -q VDA_ONESHOT_STARTED || { say 'ERROR: vdagent install task not started'; exit 1; }
+  i=0
+  while [ $i -lt 24 ]; do
+    i=$((i+1)); sleep 5
+    v=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" 'Get-Content C:\ProgramData\w11\vda-install.log -ErrorAction SilentlyContinue | Select-Object -Last 3')
+    if printf '%s' "$v" | grep -q 'VDA_AGENT_UP'; then say 'vdagent running (browser clipboard live)'; APPLIED="$APPLIED clip"; break; fi
+    if printf '%s' "$v" | grep -q 'VDA_AGENT_DOWN'; then say "WARNING: vdagent installed but agent not in a console session: $v"; break; fi
+    if printf '%s' "$v" | grep -q 'VDA_FAILED'; then say "ERROR: vdagent install failed: $v"; exit 1; fi
+  done
+  # Never exit the loop silently: without this a stuck install looks like silence.
+  if ! printf '%s' "$v" | grep -qE 'VDA_AGENT_UP|VDA_AGENT_DOWN|VDA_FAILED'; then
+    say "WARNING: vdagent install produced no verdict in time (last: $v)"
+  fi
+  ps_run "$CUR_USER" "$CUR_PASS" "$IP" '$null = Unregister-ScheduledTask -TaskName w11Vda -Confirm:$false' >/dev/null 2>&1
+fi
+ 
 # ---------------------------------------------------------------- midscene-pc API server
 # A payload tarball built FROM A LIVE VM (win32 node_modules + node.exe; never npm-install
 # from a Linux image) ships inside the image. The injector pushes it over scp on the same

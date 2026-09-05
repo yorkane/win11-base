@@ -17,6 +17,9 @@ run time from your local `.env` and are not part of the image.
   below runs on a self-contained `node.exe` inside `C:\mspc`, not an installed runtime)
 - Optional window-level AI API (midscene-pc): HTTP on guest `:3333`, started as the
   `mspcServer` logon task, reachable through the published port when a token is set
+- Two-way clipboard between the browser (noVNC) and the Windows console: Ctrl+C/Ctrl+V
+  both directions, UTF-8 clean (QEMU vdagent + SPICE guest agents + a noVNC bridge);
+  set `WIN11_CLIP=off` to disable
 - Page file, swap file and hibernation off; disk cleaned and free space zero-filled
 
 ## Quick start
@@ -62,6 +65,7 @@ only); `.gitignore` keeps the real `.env` out of git. Give it mode 600.
 | `WIN11_INJECT_TIMEOUT` | seconds to wait for the guest, default 900 |
 | `WIN11_DESKTOP` | `off` keeps the stock desktop; default applies black background, no icons, auto-hidden taskbar |
 | `WIN11_RAM_SIZE` / `WIN11_CPU_CORES` / `WIN11_DISK_SIZE` | VM sizing |
+| `WIN11_CLIP` | `off` disables the browser<->VM clipboard bridge (no vdagent install, no virtio-serial device) |
 | `WIN11_MSPC` | `off` skips the window API; default deploys it (adds ~80 MB to the image, unpacked on first boot) |
 | `WIN11_MSPC_TOKEN` | API bearer token; **empty binds the API to guest loopback only** |
 | `WIN11_MSPC_GATEWAY` / `WIN11_MSPC_MODEL_KEY` / `WIN11_MSPC_MODEL` / `WIN11_MSPC_FAMILY` | optional OpenAI-compatible gateway for the AI endpoints; window APIs work without them |
