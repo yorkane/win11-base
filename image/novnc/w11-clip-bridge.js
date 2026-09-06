@@ -90,26 +90,30 @@
     if (bar) return bar;
     bar = document.createElement("div");
     bar.id = "w11-ime-bar";
-    bar.style.cssText = "position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:1000;"
-      + "display:none;gap:6px;align-items:center;background:rgba(20,20,20,.93);border:1px solid #555;"
-      + "border-radius:6px;padding:6px 8px;font:13px/1.4 sans-serif;color:#ddd;";
+    // Tucked into the bottom-left corner: centred bars cover the VM's own UI. Kept
+    // deliberately compact (user request 2026-09-06).
+    bar.style.cssText = "position:fixed;left:8px;bottom:8px;z-index:1000;"
+      + "display:none;gap:4px;align-items:center;background:rgba(20,20,20,.90);border:1px solid #555;"
+      + "border-radius:5px;padding:3px 4px;font:12px/1.3 sans-serif;color:#ddd;";
     barInput = document.createElement("input");
     barInput.id = "w11-ime-input";
     barInput.setAttribute("lang", "zh-Hans");
     barInput.autocomplete = "off";
-    barInput.placeholder = "本地输入法组词，回车粘贴到 VM 光标处（可连续输入，关闭点右侧按钮或 Ctrl+Alt+M）";
-    barInput.style.cssText = "width:340px;padding:4px 6px;border:1px solid #666;border-radius:4px;background:#111;color:#fff;";
-    var bs = "padding:4px 8px;border:1px solid #666;border-radius:4px;background:#2a2a2a;color:#eee;cursor:pointer;";
-    var only = document.createElement("button");
-    only.id = "w11-ime-only";
-    only.textContent = "粘贴 (Enter)";
-    only.style.cssText = bs;
-    only.addEventListener("click", function () { imeSubmit(); });
+    barInput.placeholder = "组词后回车粘贴（Ctrl+Alt+M 关闭）";
+    barInput.style.cssText = "width:220px;padding:3px 5px;border:1px solid #666;border-radius:3px;background:#111;color:#fff;font:12px/1.3 sans-serif;";
+    // No send button: Enter already sends, so a button only added width (user request).
     var close = document.createElement("button");
     close.id = "w11-ime-close";
-    close.textContent = "关闭";
+    close.textContent = "";
     close.title = "关闭输入条（也可按 Ctrl+Alt+M 或 Esc）";
-    close.style.cssText = "padding:4px 8px;border:1px solid #666;border-radius:4px;background:#3a2020;color:#f0d0d0;cursor:pointer;";
+    // noVNC's own stylesheet gives buttons min-width:88px, which defeats a plain
+    // width:18px -- it must be overridden with !important (measured: computed
+    // min-width stayed 88px and the button rendered 88px wide).
+    close.style.cssText = "width:20px!important;min-width:20px!important;max-width:20px!important;"
+      + "height:20px;line-height:1;padding:0;margin:0;border:1px solid #666;"
+      + "border-radius:3px;background:#3a2020;color:#f0d0d0;cursor:pointer;"
+      + "font:12px/1 sans-serif;display:inline-block;flex:0 0 auto;";
+    close.innerHTML = "&times;";
     close.addEventListener("click", function () { imeClose(); });
     barInput.addEventListener("keydown", function (e) {
       // 组词期间（isComposing / keyCode 229）的回车属于输入法候选键，不能当发送
@@ -117,7 +121,7 @@
       if (e.key === "Enter") { e.preventDefault(); imeSubmit(); }
       else if (e.key === "Escape") { e.preventDefault(); imeClose(); }
     });
-    bar.appendChild(barInput); bar.appendChild(only); bar.appendChild(close);
+    bar.appendChild(barInput); bar.appendChild(close);
     document.body.appendChild(bar);
     return bar;
   }
