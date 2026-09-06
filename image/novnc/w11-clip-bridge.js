@@ -14,10 +14,12 @@
 //   4. panel Send button routed through the clipboard channel (fork made it type
 //      ASCII keystrokes via rfb.sendText otherwise)
 //   5. IME bar (Ctrl+Alt+M): the GUEST has no input method and Tiny11 cannot install
-//      one; users type with the BROWSER-side IME, Enter pushes the composed text via
-//      the clipboard channel and the bridge types Ctrl+V for the guest so the text
-//      lands at the caret inside the VM. While the bar is open the browser owns the
-//      keyboard (imeGuard) so pinyin letters never leak to the guest as keystrokes.
+//      one; users type with the BROWSER-side IME. Enter pushes the composed text via
+//      the clipboard channel, closes the bar and hands focus back to the VM -- the
+//      user presses Ctrl+V there (their measured-fast path; 2026-09-06: 'VNC 打字很
+//      快，复制粘贴也很快', auto-paste variants were the only slow thing). While the
+//      bar is open the browser owns the keyboard (imeGuard) so pinyin letters never
+//      leak to the guest as keystrokes.
 (function () {
   "use strict";
   var lastSent = null;
@@ -92,26 +94,21 @@
     barInput.id = "w11-ime-input";
     barInput.setAttribute("lang", "zh-Hans");
     barInput.autocomplete = "off";
-    barInput.placeholder = "本地输入法组词，回车发送到 VM 光标处（先点好输入框）";
+    barInput.placeholder = "本地输入法组词，回车送入剪贴板，然后在 VM 里 Ctrl+V";
     barInput.style.cssText = "width:340px;padding:4px 6px;border:1px solid #666;border-radius:4px;background:#111;color:#fff;";
     var bs = "padding:4px 8px;border:1px solid #666;border-radius:4px;background:#2a2a2a;color:#eee;cursor:pointer;";
-    var ok = document.createElement("button");
-    ok.id = "w11-ime-send";
-    ok.textContent = "发送并粘贴";
-    ok.style.cssText = bs;
     var only = document.createElement("button");
     only.id = "w11-ime-only";
-    only.textContent = "仅送入剪贴板";
+    only.textContent = "送入剪贴板 (Enter)";
     only.style.cssText = bs;
-    ok.addEventListener("click", function () { imeSubmit(true); });
-    only.addEventListener("click", function () { imeSubmit(false); });
+    only.addEventListener("click", function () { imeSubmit(); });
     barInput.addEventListener("keydown", function (e) {
       // 组词期间（isComposing / keyCode 229）的回车属于输入法候选键，不能当发送
       if (e.isComposing || e.keyCode === 229) return;
-      if (e.key === "Enter") { e.preventDefault(); imeSubmit(true); }
+      if (e.key === "Enter") { e.preventDefault(); imeSubmit(); }
       else if (e.key === "Escape") { e.preventDefault(); imeClose(); }
     });
-    bar.appendChild(barInput); bar.appendChild(ok); bar.appendChild(only);
+    bar.appendChild(barInput); bar.appendChild(only);
     document.body.appendChild(bar);
     return bar;
   }
@@ -127,55 +124,12 @@
     var r = rfb();
     if (r && r.focus) { try { r.focus(); } catch (e) {} }
   }
-  // Feed Ctrl+V through noVNC's own DOMKeyboardHandler (canvas listeners) rather than
-  // rfb.sendKey: that handler carries the Windows modifier re-assert + state tracking
-  // the guest needs. Listeners live on the canvas and see bubbles, so dispatch there.
-  function synthCtrlV() {
-    var target = document.querySelector("#noVNC_container canvas") || document.querySelector("canvas");
-    if (!target) return;
-    function ev(type, code, key, keyCode, ctrl) {
-      try {
-        target.dispatchEvent(new KeyboardEvent(type, {
-          bubbles: true, cancelable: true, code: code, key: key,
-          keyCode: keyCode, which: keyCode, ctrlKey: !!ctrl,
-        }));
-      } catch (e) {}
-    }
-    // Human cadence matters: four frames inside the same millisecond were dropped by
-    // the guest (AB test 2026-09-06); ~60-120ms gaps paste reliably.
-    ev("keydown", "ControlLeft", "Control", 17, true);
-    setTimeout(function () { ev("keydown", "KeyV", "v", 86, true); }, 120);
-    setTimeout(function () { ev("keyup", "KeyV", "v", 86, true); }, 180);
-    setTimeout(function () { ev("keyup", "ControlLeft", "Control", 17, false); }, 240);
-  }
-  // The strike must look like a human press, in TWO ways (both proven by A/B on
-  // 2026-09-06): (a) the guest clipboard must already serve the new bytes (single
-  // NOTIFY >=1.5s earlier), and (b) the frames need millisecond gaps -- four
-  // transitions inside the same ms were dropped by the guest (AB round A: Ctrl/V
-  // all at t+1ms, nothing pasted; trusted typing with natural gaps always pasted).
-  function pasteStrike() {
-    var r = rfb();
-    if (!r) return;
-    imeClose();
-    function tap(fn) { setTimeout(fn, 0); }
-    try {
-      r.sendKey(0xffe3, "ControlLeft", true);
-      setTimeout(function () {
-        try {
-          r.sendKey(0x76, "KeyV", true);
-          setTimeout(function () {
-            try {
-              r.sendKey(0x76, "KeyV", false);
-              setTimeout(function () {
-                try { r.sendKey(0xffe3, "ControlLeft", false); } catch (e) {}
-              }, 40);
-            } catch (e) {}
-          }, 40);
-        } catch (e) {}
-      }, 60);
-    } catch (e) {}
-  }
-  function imeSubmit(paste) {
+  // Enter = one clipboard claim, then the human does Ctrl+V in the VM: measured fast
+  // there (their own words 2026-09-06), while every bridge-side auto-strike either
+  // raced the ~1s vdagent delivery (empty paste) or waited it out (unacceptable).
+  // A human hand covers the delivery window for free. Keyboard injection was tested
+  // too and is a dead end for CJK: nut type() emitted only the ASCII tail ('BC').
+  function imeSubmit() {
     var r = rfb();
     if (!r || !barInput) return;
     var t = barInput.value;
@@ -186,27 +140,11 @@
     // a 2026-09-06 regression moved it inside the paste branch and silently broke
     // 'only to clipboard'.
     try { r.clipboardPasteFrom(t); } catch (e) { return; }
-    if (paste) {
-      // A/B PROVEN on three instances 2026-09-06: frames built by rfb.sendKey(...) --
-      // correct keysyms 0xffe3/0x76 and scancodes 29/47, ext key events on the wire --
-      // never paste inside the guest, while the SAME keys typed through noVNC's own
-      // keyboard handler paste within ~50ms. noVNC adds a per-Windows preamble (it
-      // re-asserts the modifier, see keyboard.js isWindows/ControlLeft) plus tracked
-      // modifier state. So the strike is synthesised as DOM events and fed through
-      // that handler instead of bypassing it. The bar is closed first: our own
-      // imeGuard swallows keystrokes while it is open.
-      // Delivery on this stack is not instant: the guest only fetches the bytes when
-// an app first opens the clipboard, ~1-2s after our Notify (measured: w11-clip guest
-      // clipboard held the new text at +2.0s, clean-instance strikes at 1.7-1.9s raced
-      // it and pasted empty -- the exact 'nothing happens, later it shows up' report).
-      // Strike once, safely past the fetch window.
-      setTimeout(function () { pasteStrike(); }, window.__W11_PASTE_DELAY || 2600);
-    }
-    // A sent phrase is spent: clear it so the next phrase cannot silently concatenate
-    // with the old one, and keep the caret here for continuous typing. The refocus
-    // is deferred: the button's own focus handling lands after this handler returns.
+    // Phrase spent: clear the box (no silent concatenation next round), then hand
+    // the keyboard to the VM so the very next Ctrl+V -- wherever the caret sits --
+    // is the guest's. imeClose() refocuses the RFB canvas.
     barInput.value = "";
-    setTimeout(function () { try { barInput.focus(); } catch (e) {} }, 0);
+    imeClose();
   }
 
   // ---- IME-mode guard ------------------------------------------------------
