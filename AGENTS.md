@@ -145,7 +145,7 @@ cd /home/aigc/ChatGPT/docker-w11 && python3 scripts/pssh.py scripts/xxx.ps1 270
 - 基础镜像用 `docker-compose.base.yml`（纯注入版，不挂 ./data，靠命名卷接收种子盘）；自建安装实例用 `docker-compose.yml`（安装期 USERNAME/PASSWORD 走 answer file，与运行期注入是两套凭据，变量名前缀 `WIN11_INSTALL_*` 区分开，别混）。
 - 密钥改完要生效：`docker compose -f docker-compose.base.yml up -d --force-recreate`（实测改密→SSH 改密→同步自动登录→重启一次；值没变则整轮 no-op，不重启）。
 - 只改 .env 不重建容器不会生效：注入只在容器启动时跑一次。要临时改密就重建，别去 guest 里手改（会和 .env 漂移）。
-- 端口族的默认值在 `docker-compose.base.yml`（`name: w11-13389` + 六条 ports 的 `:-` 默认值），**`.env` 里一旦留下 `WIN11_PORT_*` 就会覆盖它**（`.env.example` 现在只留注释）。并行实例用 `--env-file .env.test -p w11-test`（`.env.test` 由 `.env` 派生：密钥共用 + 实例名/端口再 +1000，模式 600，被 `.gitignore` 的 `.env.*` 排除）。`-p` 覆盖 compose 的 `name:`，决定卷名前缀，不带就会撞主实例的卷。
+- 端口族的默认值在 `docker-compose.base.yml`（`name: w11-13389` + 五条 ports 的 `:-` 默认值（mspc 移除后已无 3333 那条）），**`.env` 里一旦留下 `WIN11_PORT_*` 就会覆盖它**（`.env.example` 现在只留注释）。并行实例用 `--env-file .env.test -p w11-test`（`.env.test` 由 `.env` 派生：密钥共用 + 实例名/端口再 +1000，模式 600，被 `.gitignore` 的 `.env.*` 排除）。`-p` 覆盖 compose 的 `name:`，决定卷名前缀，不带就会撞主实例的卷。
 ## 9. 禁止事项（一条即返工）
 
 - **`open(path, 'w')` 包住「计算+校验+写入」整段**（本轮真实事故：deploy.md 被截成 0 字节，靠 repo/ 副本还原）。`open(path,'w')` 在求值当下就把文件清空，紧跟其后的 assert 抛异常也已经晚了。正确姿势：先在内存算出完整新内容（`out = src.replace(...)`），**所有 assert 针对 `out` 校验通过**后，最后一步才 `open(P,'w').write(out)`；动手前先 `io.open('/data/tmp/xxx.before','w').write(src)` 留快照。
