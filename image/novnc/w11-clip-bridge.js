@@ -16,8 +16,9 @@
 //   5. IME bar (Ctrl+Alt+M): the GUEST has no input method and Tiny11 cannot install
 //      one; users type with the BROWSER-side IME. Enter pushes the composed text via
 //      the clipboard channel, closes the bar and hands focus back to the VM -- the
-//      user presses Ctrl+V there (their measured-fast path; 2026-09-06: 'VNC 打字很
-//      快，复制粘贴也很快', auto-paste variants were the only slow thing). Focus
+//      composing, Enter sends it AND pastes it at the caret in the VM (2026-09-06:
+//      auto-paste works now that the stuck-modifier bug is fixed; 250ms is the
+//      measured floor, 500ms is the shipped default). Focus
 //      routing is plain browser semantics: composing keeps focus in the box, a click
 //      on the canvas hands the keyboard back to the VM. The bridge NEVER swallows
 //      keys or grabs focus outside the box (v7.1 -- imeGuard caused VM keyboard loss).
@@ -95,12 +96,12 @@
     barInput.id = "w11-ime-input";
     barInput.setAttribute("lang", "zh-Hans");
     barInput.autocomplete = "off";
-    barInput.placeholder = "本地输入法组词，回车送入剪贴板，然后在 VM 里 Ctrl+V";
+    barInput.placeholder = "本地输入法组词，回车直接粘贴到 VM 光标处";
     barInput.style.cssText = "width:340px;padding:4px 6px;border:1px solid #666;border-radius:4px;background:#111;color:#fff;";
     var bs = "padding:4px 8px;border:1px solid #666;border-radius:4px;background:#2a2a2a;color:#eee;cursor:pointer;";
     var only = document.createElement("button");
     only.id = "w11-ime-only";
-    only.textContent = "送入剪贴板 (Enter)";
+    only.textContent = "粘贴 (Enter)";
     only.style.cssText = bs;
     only.addEventListener("click", function () { imeSubmit(); });
     barInput.addEventListener("keydown", function (e) {
@@ -136,6 +137,26 @@
   // raced the ~1s vdagent delivery (empty paste) or waited it out (unacceptable).
   // A human hand covers the delivery window for free. Keyboard injection was tested
   // too and is a dead end for CJK: nut type() emitted only the ASCII tail ('BC').
+  // The guest clipboard only serves the new bytes once something opens it, which
+  // costs roughly a second over QEMU->vdagent (measured earlier: guest Requests at
+  // 911ms/1864ms). Auto-paste therefore claims once, waits, then strikes. Earlier
+  // attempts failed for a second, independent reason too: the guest was left with
+  // Ctrl+Alt held (see imeHotkey), so the V arrived as Ctrl+Alt+V and did nothing.
+  // Now that releaseStuckModifiers() runs, the strike finally lands.
+  function pasteStrike() {
+    var r = rfb();
+    if (!r || !r.sendKey) return;
+    try { r.sendKey(0xffe3, "ControlLeft", true); } catch (e) { return; }
+    setTimeout(function () {
+      try { r.sendKey(0x76, "KeyV", true); } catch (e) {}
+      setTimeout(function () {
+        try { r.sendKey(0x76, "KeyV", false); } catch (e) {}
+        setTimeout(function () {
+          try { r.sendKey(0xffe3, "ControlLeft", false); } catch (e) {}
+        }, 40);
+      }, 40);
+    }, 60);
+  }
   function imeSubmit() {
     var r = rfb();
     if (!r || !barInput) return;
@@ -143,14 +164,14 @@
     if (!t) return;
     lastSent = t;
     // Single claim (a re-NOTIFY restarts the ~1s QEMU->vdagent delivery cycle -- the
-    // old ladder is what made pastes empty or late). The push happens on BOTH paths;
-    // a 2026-09-06 regression moved it inside the paste branch and silently broke
-    // 'only to clipboard'.
-    // v5 regression revisited: even a FAILED submit must close the bar and clear --
-    // a half-open state must never exist, it is what trapped users before.
+    // old ladder is what made pastes empty or late).
+    try { r.clipboardPasteFrom(t); } catch (e) {}
     barInput.value = "";
-    try { if (t) r.clipboardPasteFrom(t); } catch (e) {}
     imeClose();
+    // 250ms is the measured floor (150ms strikes before the guest serves the new
+    // bytes and pastes the previous clipboard); 500ms keeps margin without feeling
+    // slow. Single strike -- a retry would double-paste once the first lands.
+    setTimeout(pasteStrike, window.__W11_PASTE_DELAY || 500);
   }
 
   // ---- hotkey --------------------------------------------------------------
