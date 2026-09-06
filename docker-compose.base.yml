@@ -1,12 +1,12 @@
 # 用 ghcr.io/yorkane/win11-base:latest 起一台干净的 Win11（直接进桌面，不重装）。
 # 密钥全部来自同目录 .env（cp .env.example .env 后填写）；.env 不入库。
-# 用法：docker compose -f docker-compose.base.yml up -d
-name: win11-base
+# 用法：docker compose -f docker-compose.base.yml up -d      （默认就是固定入口 w11-13389）
+name: w11-13389   # 项目名=实例名=卷名前缀；要并行第二台用 -p <别的名字>（卷随项目名走）
 services:
   windows:
     image: ${WIN11_IMAGE:-ghcr.io/yorkane/win11-base:latest}
-    container_name: ${WIN11_CONTAINER_NAME:-win11-base}
-    hostname: ${WIN11_CONTAINER_NAME:-win11-base}
+    container_name: ${WIN11_CONTAINER_NAME:-w11-13389}
+    hostname: ${WIN11_CONTAINER_NAME:-w11-13389}
     environment:
       RAM_SIZE: "${WIN11_RAM_SIZE:-4G}"
       CPU_CORES: "${WIN11_CPU_CORES:-4}"
@@ -31,20 +31,22 @@ services:
       # midscene-pc 窗口级 AI API（guest :3333）；WIN11_MSPC=off 关闭
       WIN11_MSPC: "${WIN11_MSPC:-on}"
       WIN11_MSPC_TOKEN: "${WIN11_MSPC_TOKEN:-}"
-      WIN11_MSPC_GATEWAY: "${WIN11_MSPC_GATEWAY:-}"
-      WIN11_MSPC_MODEL_KEY: "${WIN11_MSPC_MODEL_KEY:-}"
-      WIN11_MSPC_MODEL: "${WIN11_MSPC_MODEL:-gpt-5.6-luna}"
-      WIN11_MSPC_FAMILY: "${WIN11_MSPC_FAMILY:-gpt-5}"
+      # 模型四项统一 WIN11_MSPC_MODEL_* 命名，与注入器一一对应，无别名无回退
+      WIN11_MSPC_MODEL_BASE_URL: "${WIN11_MSPC_MODEL_BASE_URL:-}"
+      WIN11_MSPC_MODEL_API_KEY: "${WIN11_MSPC_MODEL_API_KEY:-}"
+      WIN11_MSPC_MODEL_NAME: "${WIN11_MSPC_MODEL_NAME:-gpt-5.6-luna}"
+      WIN11_MSPC_MODEL_FAMILY: "${WIN11_MSPC_MODEL_FAMILY:-gpt-5}"
     devices: [/dev/kvm, /dev/net/tun]
     cap_add: [NET_ADMIN]
     ports:
-      - "${WIN11_PORT_VNC:-8006}:8006"      # noVNC
-      - "${WIN11_PORT_RDP:-3389}:3389/tcp"   # RDP
-      - "${WIN11_PORT_RDP:-3389}:3389/udp"
-      - "${WIN11_PORT_SSH:-2222}:22"         # SSH -> PowerShell
-      - "${WIN11_PORT_MSPC:-3333}:3333"       # midscene-pc API (dockur NAT forwards to guest)
+      # 固定入口族：标准端口 +10000（后两位=通道）。默认值即约定，见 deploy.md 6.9
+      - "${WIN11_PORT_VNC:-18006}:8006"        # noVNC
+      - "${WIN11_PORT_RDP:-13389}:3389/tcp"    # RDP（固定入口）
+      - "${WIN11_PORT_RDP:-13389}:3389/udp"
+      - "${WIN11_PORT_SSH:-10022}:22"          # SSH -> PowerShell
+      - "${WIN11_PORT_MSPC:-13333}:3333"        # midscene-pc API (dockur NAT forwards to guest)
       # Chrome CDP：默认只绑宿主回环（CDP 无鉴权）；WIN11_CDP_BIND=0.0.0.0 才对外
-      - "${WIN11_CDP_BIND:-127.0.0.1}:${WIN11_PORT_CDP:-9222}:9222"
+      - "${WIN11_CDP_BIND:-127.0.0.1}:${WIN11_PORT_CDP:-19222}:9222"
     volumes:
       - win11-storage:/storage   # 种子盘首次使用时复制进卷；换目录挂载可持久化
       - /etc/localtime:/etc/localtime:ro

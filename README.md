@@ -68,8 +68,8 @@ restarting the `w11CdpChrome` task; the published host port stays what you mappe
 Prefer `docker run`? Pass the same variables with `-e`, or keep them in a file and use
 `--env-file` (one `KEY=VALUE` per line, no shell syntax):
 
-    docker run -d --name win11 --device /dev/kvm --device /dev/net/tun --cap-add NET_ADMIN \
-      -p 127.0.0.1:8006:8006 -p 127.0.0.1:3389:3389 -p 127.0.0.1:2222:22 \
+    docker run -d --name w11-13389 --device /dev/kvm --device /dev/net/tun --cap-add NET_ADMIN \
+      -p 18006:8006 -p 13389:3389 -p 10022:22 -p 127.0.0.1:19222:9222 \
       --env-file .env --stop-grace-period 120s \
       ghcr.io/yorkane/win11-base:latest
 
@@ -91,15 +91,15 @@ only); `.gitignore` keeps the real `.env` out of git. Give it mode 600.
 | `WIN11_DESKTOP` | `off` keeps the stock desktop; default applies black background, no icons, always-visible taskbar (left-aligned, no search, no Store pin) |
 | `WIN11_CHROME` | `off` skips the Chrome Enterprise install (offline MSI + sign-in/translate/new-tab policies) |
 | `WIN11_CDP` | `off` skips the Chrome DevTools endpoint; default runs supervised Chrome with CDP on guest `:9222` |
-| `WIN11_PORT_CDP` | published host port for CDP (default 9222) |
+| `WIN11_PORT_CDP` | published host port for CDP (compose default **19222**) |
 | `WIN11_CDP_BIND` | host interface to publish CDP on; default `127.0.0.1` (CDP has no auth) |
 | `WIN11_RAM_SIZE` / `WIN11_CPU_CORES` / `WIN11_DISK_SIZE` | VM sizing |
 | `WIN11_CLIP` | `off` disables the browser<->VM clipboard bridge (no vdagent install, no virtio-serial device) |
 | `WIN11_MSPC` | `off` skips the window API; default deploys it (adds ~80 MB to the image, unpacked on first boot) |
 | `WIN11_MSPC_TOKEN` | API bearer token; **empty binds the API to guest loopback only** |
-| `WIN11_MSPC_GATEWAY` / `WIN11_MSPC_MODEL_KEY` / `WIN11_MSPC_MODEL` / `WIN11_MSPC_FAMILY` | optional OpenAI-compatible gateway for the AI endpoints; window APIs work without them |
-| `WIN11_PORT_VNC` / `WIN11_PORT_RDP` / `WIN11_PORT_SSH` / `WIN11_PORT_MSPC` | published host ports |
-| `WIN11_CONTAINER_NAME` | container name and hostname |
+| `WIN11_MSPC_MODEL_BASE_URL` / `_API_KEY` / `_NAME` / `_FAMILY` | optional OpenAI-compatible gateway for the AI endpoints; window APIs work without them |
+| `WIN11_PORT_VNC` / `_RDP` / `_SSH` / `_MSPC` / `_CDP` | published host ports. Leave them unset: the compose defaults **are** the fixed-entry family (RDP 13389 / VNC 18006 / SSH 10022 / MSPC 13333 / CDP 19222 loopback-only). Setting them in `.env` silently overrides that convention |
+| `WIN11_CONTAINER_NAME` | container name and hostname (default `w11-13389`) |
 
 The compose file marks `WIN11_USER` and `WIN11_PASSWORD` as required, so a missing `.env`
 fails immediately instead of booting a machine on the public initial password.

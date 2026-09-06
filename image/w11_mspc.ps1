@@ -100,7 +100,10 @@ Set-Content -Path $launch -Value $ls -Encoding ASCII
 $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ' + $launch)
 $pri = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
 $trg = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
+# The clipboard bridge depends on this API for the IME bar: treat it as a service.
+# RestartCount 3 gave up permanently after three crashes (seen live: node died, task
+# stayed Ready, fetch hung until timeout). 999 per-minute restarts = effectively always.
+$set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
 $null = Register-ScheduledTask -TaskName mspcServer -Action $act -Principal $pri -Trigger $trg -Settings $set -Force
 $running = Get-NetTCPConnection -LocalPort 3333 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($running -and $envChanged) {
