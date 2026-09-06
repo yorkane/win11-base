@@ -14,7 +14,8 @@
 | **Win11 虚拟机内**执行命令 | `python3 ~/.codex/skills/win11-docker/scripts/psx.py <ps1> [秒]`（SSH + EncodedCommand；`--bg --tag` 转 SYSTEM 后台任务，`--status TAG` 查进度）。仓库内 `scripts/pssh.py` 是其同步模式前身 | 直接 `ssh ... 'powershell -Command ...'` |
 | Win11 里传文件 / 回收日志 | SMB：宿主 `shared/` = VM `\\host.lan\Data` | VM 内的 `Z:` 盘符（脚本上下文里不可靠） |
 | 必须点 GUI 才有结果的操作 | `scripts/agent-run.sh z.bat`（midscene RDP + 视觉模型） | 键盘盲打长文件名 |
-| 目视验证桌面 | `scripts/vnc_shot.py` 生成 PNG，再在 exec 内 `await tools.view_image({path})`（约 1s 出全帧） | 顶层调用 view_image；把 base64 塞进命令输出；**用 RDP 截图看桌面**（见 §1.3） |
+| 驱动浏览器做页面级任务（打开网站/搜索/点链接） | `playwright-cli attach --cdp=http://127.0.0.1:<CDP口>` 接管 guest Chrome，再带 `-s=<session>` 下 `find/fill/click/eval/tab-list`（全文本取证，不出图） | `close`（会关 guest 浏览器；断开用 `detach`）；或自写 puppeteer-core（见 deploy.md §6.8）
+| 目视验证桌面 | `scripts/vnc_shot.py` 生成 PNG，再在 exec 内 `await tools.view_image({path})`（约 1s 出全帧）；**多实例时先把脚本里写死的 `localhost:8006` 改成目标实例的 VNC 口**（否则截到别人的桌面，已踩过） | 顶层调用 view_image；把 base64 塞进命令输出；**用 RDP 截图看桌面**（见 §1.3） |
 
 ### 1.1 看图（本轮真实教训）
 

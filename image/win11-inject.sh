@@ -18,7 +18,7 @@
 #   WIN11_CLIP           off -> skip the vdagent clipboard bridge (browser <-> guest)
 #   WIN11_MSPC           off -> skip the midscene-pc API server (default: on if payload present)
 #   WIN11_MSPC_TOKEN     token for the API on :3333. Empty = bind guest loopback only.
-#   WIN11_MSPC_GATEWAY / WIN11_MSPC_MODEL_KEY / WIN11_MSPC_MODEL / WIN11_MSPC_FAMILY
+#   WIN11_MSPC_MODEL_BASE_URL / _API_KEY / _NAME / _FAMILY
 #                        model backend for AI endpoints (window APIs need none of these)
 #
 # The sealed disk carries a well-known initial credential, exactly like dockur ships
@@ -43,10 +43,10 @@ DESKTOP="${WIN11_DESKTOP:-on}"
 CLIP="${WIN11_CLIP:-on}"
 MSPC="${WIN11_MSPC:-on}"
 MSPC_TOKEN="${WIN11_MSPC_TOKEN:-}"
-MSPC_GATEWAY="${WIN11_MSPC_GATEWAY:-}"
-MSPC_MODEL_KEY="${WIN11_MSPC_MODEL_KEY:-}"
-MSPC_MODEL="${WIN11_MSPC_MODEL:-gpt-5.6-luna}"
-MSPC_FAMILY="${WIN11_MSPC_FAMILY:-gpt-5}"
+MSPC_GATEWAY="${WIN11_MSPC_MODEL_BASE_URL:-}"
+MSPC_MODEL_KEY="${WIN11_MSPC_MODEL_API_KEY:-}"
+MSPC_MODEL="${WIN11_MSPC_MODEL_NAME:-gpt-5.6-luna}"
+MSPC_FAMILY="${WIN11_MSPC_MODEL_FAMILY:-gpt-5}"
 
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 SSH_OPTS="$SSH_OPTS -o ConnectTimeout=10 -o PreferredAuthentications=password"
@@ -346,7 +346,7 @@ CHROME_CDP="${WIN11_CDP:-on}"
 if [ "$CHROME_CDP" != "off" ]; then
   say 'ensuring Chrome CDP on guest :9222'
   push_asset chrome_cdp.ps1
-  cdp_reg='if (Test-Path C:\ProgramData\w11\cdp.log) { Remove-Item C:\ProgramData\w11\cdp.log -Force }; $null = Register-ScheduledTask -TaskName w11CdpChrome -Action (New-ScheduledTaskAction -Execute powershell.exe -Argument "-NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\w11\chrome_cdp.ps1" -WorkingDirectory C:\ProgramData\w11) -Principal (New-ScheduledTaskPrincipal -UserId @@WUSER@@ -LogonType Interactive -RunLevel Highest) -Trigger (New-ScheduledTaskTrigger -AtLogOn -User @@WUSER@@) -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)) -Force; $x = Get-ScheduledTask -TaskName w11CdpChrome; Write-Output ("TASK=" + $x.TaskName); Start-ScheduledTask -TaskName w11CdpChrome; Write-Output CDP_TASK_STARTED'
+  cdp_reg='if (Test-Path C:\ProgramData\w11\cdp.log) { Remove-Item C:\ProgramData\w11\cdp.log -Force }; $null = Register-ScheduledTask -TaskName w11CdpChrome -Action (New-ScheduledTaskAction -Execute powershell.exe -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\ProgramData\w11\chrome_cdp.ps1" -WorkingDirectory C:\ProgramData\w11) -Principal (New-ScheduledTaskPrincipal -UserId @@WUSER@@ -LogonType Interactive -RunLevel Highest) -Trigger (New-ScheduledTaskTrigger -AtLogOn -User @@WUSER@@) -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)) -Force; $x = Get-ScheduledTask -TaskName w11CdpChrome; Write-Output ("TASK=" + $x.TaskName); Start-ScheduledTask -TaskName w11CdpChrome; Write-Output CDP_TASK_STARTED'
   cdp_reg="${cdp_reg//@@WUSER@@/$(psq "$CUR_USER")}"
   out=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" "$cdp_reg")
   printf '%s' "$out" | grep -q CDP_TASK_STARTED || say "WARNING: cdp task not registered: $(printf '%s' "$out" | tr '\r\n' ' ')"
@@ -412,10 +412,10 @@ fi
 # cmd -> PowerShell and corrupt silently (the WeChat bat incident).
 if [ "$MSPC" != "off" ] && [ -f /usr/local/share/win11/mspc-payload.tar.gz ]; then
   strict WIN11_MSPC_TOKEN "$MSPC_TOKEN" '^[A-Za-z0-9._@-]+$'
-  strict WIN11_MSPC_GATEWAY "$MSPC_GATEWAY" '^[A-Za-z0-9./:_+-]+$'
-  strict WIN11_MSPC_MODEL_KEY "$MSPC_MODEL_KEY" '^[A-Za-z0-9._-]+$'
-  strict WIN11_MSPC_MODEL "$MSPC_MODEL" '^[A-Za-z0-9._-]+$'
-  strict WIN11_MSPC_FAMILY "$MSPC_FAMILY" '^[A-Za-z0-9._-]+$'
+  strict WIN11_MSPC_MODEL_BASE_URL "$MSPC_GATEWAY" '^[A-Za-z0-9./:_+-]+$'
+  strict WIN11_MSPC_MODEL_API_KEY "$MSPC_MODEL_KEY" '^[A-Za-z0-9._-]+$'
+  strict WIN11_MSPC_MODEL_NAME "$MSPC_MODEL" '^[A-Za-z0-9._-]+$'
+  strict WIN11_MSPC_MODEL_FAMILY "$MSPC_FAMILY" '^[A-Za-z0-9._-]+$'
   if [ -n "$MSPC_TOKEN" ]; then say "deploying midscene-pc API (:3333, token-protected)"; else say "deploying midscene-pc API (:3333, no token -> guest loopback only)"; fi
   MSPC_VERSION=$(sha256sum /usr/local/share/win11/mspc-payload.tar.gz | cut -c1-12)
   push_asset w11_mspc.ps1
