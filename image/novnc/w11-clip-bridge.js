@@ -160,11 +160,19 @@
   // 2026-09-06: 'keyboard dead, state stuck, only Ctrl+Alt+M recovers'). Native
   // focus routing is sufficient: keystrokes go wherever the caret is -- composing
   // in the box, VM typing after clicking the canvas. No guard needed.
-  // The VM sees the Ctrl and Alt keydowns before we can know a combo is coming, so it
-  // MUST see their keyups too -- swallowing them is what left the guest with Ctrl+Alt
-  // HELD (measured: typing 'AFTERBAR' afterwards opened a browser link popup; earlier
-  // variants typed a lone EUR sign). Only M is ours: swallow its keydown and keyup,
-  // let the modifiers through untouched so the guest's state stays balanced.
+  // KEY TRACE PROOF (2026-09-06): the guest receives ControlLeft DOWN and AltLeft DOWN
+  // and NEVER an UP for either -- because opening the bar moves focus to the input box,
+  // so the canvas-bound keyboard listener simply never sees the modifier keyups. The
+  // guest is then stuck with Ctrl+Alt held and every following letter becomes a
+  // shortcut ('CD' arrived as EUR, 'AFTERBAR' opened a browser link popup). Letting
+  // them 'pass through' is impossible once focus has moved: we must release them
+  // ourselves, explicitly, right after toggling.
+  function releaseStuckModifiers() {
+    var r = rfb();
+    if (!r || !r.sendKey) return;
+    try { r.sendKey(0xffe9, "AltLeft", false); } catch (e) {}
+    try { r.sendKey(0xffe3, "ControlLeft", false); } catch (e) {}
+  }
   var swallowM = false;
   function imeHotkey(e) {
     var isM = (e.code === "KeyM" || e.key === "m" || e.key === "M");
@@ -180,6 +188,7 @@
     if (e.type === "keydown") {
       swallowM = true;
       if (bar && bar.style.display !== "none") imeClose(); else imeOpen();
+      releaseStuckModifiers();
     }
   }
   document.addEventListener("keydown", imeHotkey, true);
