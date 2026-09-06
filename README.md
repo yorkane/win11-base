@@ -1,172 +1,79 @@
-# win11-base
+# docker-w11
 
-A boot-ready Windows 11 image built on [dockurr/windows](https://github.com/dockur/windows):
-the installed disk is baked into the image, so a new container boots straight to the
-desktop instead of running setup. Account name, password and KMS host are injected at
-run time from your local `.env` and are not part of the image.
+在 Docker 里跑 Windows 11 虚拟机（底座 [dockurr/windows](https://github.com/dockur/windows)）。
+本仓库同时管两件事：一台自建安装实例（装机 + OEM 首登自动化），以及一个开箱即用的基础镜像
+[ghcr.io/yorkane/win11-base](https://github.com/yorkane/win11-base)（装好的盘烘进镜像，新容器直接进桌面）。
 
-## What is inside
+> 动手前先读 [AGENTS.md](AGENTS.md)（工具入口、转义四层链、判读标准、禁止事项）。
+> 部署实录：[deploy.md](deploy.md)（唯一文档：装机、操控、瘦身转基础镜像、.env 注入、桌面形态）。
+> 可复用代码与脚本已抽成技能 win11-docker（`~/.codex/skills/win11-docker/`）。
 
-- Tiny11 Core 25H2 English (Windows 11 Pro), KMS-activated, renews every 7 days online
-- One local administrator account, SSH shell is PowerShell
-- OpenSSH Server (Microsoft portable build) on port 22, `sshd` = Running/Automatic
--- Solid black desktop: no wallpaper files, no lock-screen image, no desktop icons.
-   The taskbar stays **always visible** with icons **left-aligned**, no search box
-   and no Store pin (re-applied at every logon by the `w11DeskHide` task;
-   `WIN11_DESKTOP=off` keeps the stock desktop)
-- Google Chrome (Enterprise offline MSI) with policies that skip the sign-in prompt
-  and the translation bubble and land straight on the new-tab page
-  (`WIN11_CHROME=off` skips the install). Nothing else third-party is installed
-  (the window API below runs on a self-contained `node.exe` inside `C:\mspc`,
-  not an installed runtime)
-- Chrome DevTools Protocol on guest `:9222`, published as `WIN11_PORT_CDP`: a persistent
-  logon task launches and supervises Chrome on the visible desktop, so any CDP client
-  (`puppeteer.connect`, Playwright, chrome-devtools) can drive the real browser.
-  `WIN11_CDP=off` skips the endpoint (`WIN11_CHROME=off` implies it)
-- `C:\activate.bat` for re-activation
-- Optional window-level AI API (midscene-pc): HTTP on guest `:3333`, started as the
-  `mspcServer` logon task, reachable through the published port when a token is set
-- Two-way clipboard between the browser (noVNC) and the Windows console: Ctrl+C/Ctrl+V
-  both directions, UTF-8 clean (QEMU vdagent + SPICE guest agents + a noVNC bridge);
-  set `WIN11_CLIP=off` to disable
-- Page file, swap file and hibernation off; disk cleaned and free space zero-filled
+## 两种用法
 
-## Quick start
+### 1）要一台干净的 Win11（推荐）：基础镜像 + .env
 
-    cp .env.example .env      # fill in real values
+`docker-compose.base.yml` 拉起 `ghcr.io/yorkane/win11-base:latest`，不跑安装程序，约一分钟后直接进桌面。
+账户名、密码、KMS 全部来自本机 `.env`，镜像里不含任何密钥：
+
+    cp .env.example .env      # 填真实值
     chmod 600 .env
     docker compose -f docker-compose.base.yml up -d
 
-Then wait for the guest to come up (about a minute on a fresh volume) and connect:
+    ssh <WIN11_USER>@127.0.0.1 -p <WIN11_PORT_SSH>   # 落地就是 PowerShell
 
-    ssh <WIN11_USER>@127.0.0.1 -p <WIN11_PORT_SSH>     # lands in PowerShell
+端口不填就是**固定入口族**（= 标准端口 +10000）：RDP 13389、noVNC 18006、SSH 10022、
+Chrome CDP 19222（仅宿主回环），容器名 w11-13389。要一台端口再 +1000
+偏移、独立卷的固定测试机：
 
-With `WIN11_MSPC_TOKEN` set in `.env`, the window API answers once the guest is up:
+    docker compose --env-file .env.test -f docker-compose.base.yml -p w11-test up -d
 
-    curl "http://127.0.0.1:<WIN11_PORT_MSPC>/api/windows?token=<WIN11_MSPC_TOKEN>"
+改密码后要生效：`docker compose -f docker-compose.base.yml up -d --force-recreate`。注入只在容器启动时
+跑一次，只改 `.env` 不重建不会生效；值没变则整轮 no-op、不重启。
 
-The token travels as a query parameter (that is what the server checks; a wrong or
-missing token gets HTTP 401). Endpoints include `/api/windows`, window focus/minimize/
-close, screenshots, and AI actions when a gateway is configured.
+### 2）自建安装实例（win11-en：装机 + OEM 首登自动化）
 
-Chrome CDP is on the published port (default `9222`). Verify it and point a client at it:
+`docker-compose.yml` 挂 `./data`（含 `custom.iso`）与 `./oem`：首次启动走无人值守安装，
+首登自动执行 `oem/install.bat`（KMS 激活、纯黑桌面、OpenSSH Server）。安装期账户用 `.env` 里的
+`WIN11_INSTALL_USER`/`WIN11_INSTALL_PASSWORD`，与运行期注入的 `WIN11_USER`/`WIN11_PASSWORD` 是两套，别混。
 
-    curl http://127.0.0.1:<WIN11_PORT_CDP>/json/version
+    bash scripts/start.sh
 
-    // puppeteer-core
-    const browser = await puppeteer.connect({
-      browserWSEndpoint: (await fetch("http://127.0.0.1:<WIN11_PORT_CDP>/json/version")
-        .then(r => r.json())).webSocketDebuggerUrl,
-    });
+## 密钥：只用 .env
 
-The published port forwards to the guest CDP port unchanged, so a remote client
-connects to `ws://<host>:<WIN11_PORT_CDP>/devtools/page/<id>`.
-Inside the guest, Chrome itself listens on `127.0.0.1:9223` and a portproxy rule owns `0.0.0.0:9222` for the container NAT (Chrome >=136 refuses to bind
-DevTools beyond loopback). Change the guest port by writing it to `C:\ProgramData\w11\cdp.port` and
-restarting the `w11CdpChrome` task; the published host port stays what you mapped.
+`.env` 只留在本机（600 权限），`.gitignore` 已排除；仓库只提交 `.env.example` 占位模板。
+`docker-compose.base.yml` 把 `WIN11_USER`/`WIN11_PASSWORD` 用 `${VAR:?}` 标成必填：缺 `.env` 直接失败，
+不会用镜像里那个公开初始密码把机器起起来。端口、内存、CPU、容器名都是 `${VAR:-默认值}`，
+多实例并行只改 `.env`、不动 compose 文件。
 
-Prefer `docker run`? Pass the same variables with `-e`, or keep them in a file and use
-`--env-file` (one `KEY=VALUE` per line, no shell syntax):
-
-    docker run -d --name w11-13389 --device /dev/kvm --device /dev/net/tun --cap-add NET_ADMIN \
-      -p 18006:8006 -p 13389:3389 -p 10022:22 -p 127.0.0.1:19222:9222 \
-      --env-file .env --stop-grace-period 120s \
-      ghcr.io/yorkane/win11-base:latest
-
-## Secrets: `.env` only
-
-No credential lives in the image, the Dockerfile or the compose file. `docker compose`
-reads `.env` from the project directory automatically. Commit `.env.example` (placeholders
-only); `.gitignore` keeps the real `.env` out of git. Give it mode 600.
-
-| Variable | Meaning |
+| 变量 | 用途 |
 | --- | --- |
-| `WIN11_USER` | local account name (renames the account on the disk) |
-| `WIN11_PASSWORD` | local account password (**required**) |
-| `WIN11_KMS` | KMS `host[:port]` to activate against; empty disables activation |
-| `WIN11_KMS_KEY` | optional KMS client key (GVLK) for that host |
-| `WIN11_INIT_USER` / `WIN11_INIT_PASSWORD` | credential currently on the disk, default `aigc`/`aigc` |
-| `WIN11_GUEST_IP` | skip guest discovery and use this address |
-| `WIN11_INJECT_TIMEOUT` | seconds to wait for the guest, default 900 |
-| `WIN11_DESKTOP` | `off` keeps the stock desktop; default applies black background, no icons, always-visible taskbar (left-aligned, no search, no Store pin) |
-| `WIN11_CHROME` | `off` skips the Chrome Enterprise install (offline MSI + sign-in/translate/new-tab policies) |
-| `WIN11_CDP` | `off` skips the Chrome DevTools endpoint; default runs supervised Chrome with CDP on guest `:9222` |
-| `WIN11_PORT_CDP` | published host port for CDP (compose default **19222**) |
-| `WIN11_CDP_BIND` | host interface to publish CDP on; default `127.0.0.1` (CDP has no auth) |
-| `WIN11_RAM_SIZE` / `WIN11_CPU_CORES` / `WIN11_DISK_SIZE` | VM sizing |
-| `WIN11_CLIP` | `off` disables the browser<->VM clipboard bridge (no vdagent install, no virtio-serial device) |
-| `WIN11_MSPC` | `off` skips the window API; default deploys it (adds ~80 MB to the image, unpacked on first boot) |
-| `WIN11_MSPC_TOKEN` | API bearer token; **empty binds the API to guest loopback only** |
-| `WIN11_MSPC_MODEL_BASE_URL` / `_API_KEY` / `_NAME` / `_FAMILY` | optional OpenAI-compatible gateway for the AI endpoints; window APIs work without them |
-| `WIN11_PORT_VNC` / `_RDP` / `_SSH` / `_MSPC` / `_CDP` | published host ports. Leave them unset: the compose defaults **are** the fixed-entry family (RDP 13389 / VNC 18006 / SSH 10022 / MSPC 13333 / CDP 19222 loopback-only). Setting them in `.env` silently overrides that convention |
-| `WIN11_CONTAINER_NAME` | container name and hostname (default `w11-13389`) |
+| `WIN11_INSTALL_USER` / `WIN11_INSTALL_PASSWORD` | 安装期账户（dockur answer file，仅自建安装实例） |
+| `WIN11_USER` / `WIN11_PASSWORD` | 运行期注入 guest 的账户与密码（必填） |
+| `WIN11_INIT_USER` / `WIN11_INIT_PASSWORD` | guest 盘当前生效的初始凭据，默认 aigc/aigc |
+| `WIN11_KMS` / `WIN11_KMS_KEY` | KMS `host[:port]` 与可选 GVLK；留空则跳过激活 |
+| `WIN11_RAM_SIZE` / `WIN11_CPU_CORES` | VM 资源 |
+| `WIN11_PORT_VNC` / `WIN11_PORT_RDP` / `WIN11_PORT_SSH` / `WIN11_PORT_CDP` | 宿主端口覆盖：**默认不设**，默认值就是固定入口族（RDP 13389 / noVNC 18006 / SSH 10022 / CDP 19222）；在这里写它们会覆盖约定（deploy.md 6.9） |
+| `WIN11_CONTAINER_NAME` | 容器名与主机名，默认 w11-13389 |
+| `WIN11_GUEST_IP` / `WIN11_INJECT_TIMEOUT` | 跳过 guest 发现 / 注入等待秒数 |
+| `WIN11_DESKTOP` | 桌面形态：默认 on（纯黑+无图标+任务栏常显、图标左对齐、无搜索框、无商店图钉），off 保持原生桌面 |
 
-The compose file marks `WIN11_USER` and `WIN11_PASSWORD` as required, so a missing `.env`
-fails immediately instead of booting a machine on the public initial password.
+## 目录
 
-Rotate later: edit `.env`, then
-`docker compose -f docker-compose.base.yml up -d --force-recreate`.
+    docker-w11/
+    ├── .env.example              # 密钥模板（提交）；.env 是本地真实值（不提交）
+    ├── docker-compose.base.yml   # 基础镜像：纯注入，命名卷收种子盘
+    ├── docker-compose.yml        # 自建安装实例 win11-en
+    ├── image/                    # 基础镜像构建上下文（Dockerfile + win11-inject.sh + start.sh + seed/）
+    ├── repo/                     # ghcr 镜像公开仓库的工作副本
+    ├── oem/                      # -> VM C:\OEM，首登自动化
+    ├── shared/                   # SMB 双向：VM 内 \\host.lan\Data
+    ├── data/                     # win11-en 的 /storage（custom.iso、磁盘、windows.* 状态）
+    └── scripts/                  # 宿主侧工具（截图、清理、转基础镜像）
 
-## How injection works
+## 操作要点
 
-The sealed disk carries the well-known initial credential `aigc`/`aigc`, in the same way
-dockur ships `admin`/`admin`. On startup a hook waits for the guest to offer SSH, logs in
-with that credential (or the `WIN11_INIT_*` pair you supply), renames the account, sets the
-new password, keeps the auto-logon registry in step, activates against your KMS host,
-rewrites `C:\activate.bat`, applies the desktop look, installs Chrome (policies
-included), and reboots the guest once so the console logs in unattended. It runs on every start and is idempotent: when the volume already matches the
-requested state, nothing changes and the guest is not rebooted.
-
-**Always set `WIN11_USER` and `WIN11_PASSWORD`.** Without them the machine stays on the
-public initial credential, and anyone who can reach port 22 or RDP has the password.
-
-## Size
-
-About 5.8 GB compressed: 569 MB of dockur base, a 4.99 GB compressed qcow2 holding
-9.4 GB of used NTFS, plus 159 MB of Chrome Enterprise MSI and ~80 MB of window-API
-payload (both unpacked into the guest on first boot).
-
-## Repository layout
-
-    .env.example              credentials template (the real .env stays local, mode 600)
-    docker-compose.base.yml   run this; wires every variable into the container
-    image/Dockerfile          dockurr/windows + injector + seeded disk
-    image/win11-inject.sh     the startup injector (rename, password, KMS, auto-logon)
-    image/start.sh            replaces /run/start.sh, the hook dockur invites you to override
-    image/.dockerignore       keeps the disk out of the build context
-
-`image/win11-inject.sh` and `image/start.sh` in this repository are byte-identical to the files
-inside the published image (`md5sum /usr/local/bin/win11-inject /run/start.sh`). Read them before
-you point this image at a network you do not control.
-
-## Building
-
-Only the disk is missing from git: `image/seed/` (a ~5 GB compressed qcow2) ships through the
-image, not the repository. A clone gives you the injector and the Dockerfile, not a bootable
-image. Two options:
-
-- Use the published image. That is the supported path; nothing to build.
-- Build your own: install Windows once with upstream `dockurr/windows` (your own ISO and
-  account), let it finish, shut it down gracefully, then point `image/Dockerfile` at that
-  `/storage` directory as the seed. Keep the `windows.*` state files, especially
-  `windows.boot` -- without it the container decides Windows was never installed and reinstalls.
-  Put `COPY seed/` first in the Dockerfile and the thin injector layers last, so editing the
-  injector does not re-transfer 5 GB on push.
-
-    docker build -t win11-base image
-
-## Caveats
-
-- Activation is tied to the sealed disk and the MAC address baked into it. Cloning the
-  volume is fine; cloning and rewriting the MAC is not.
-- KMS renewal needs outbound network; if the license ever lapses, run `C:\activate.bat`.
-- Force-killing the container can corrupt NTFS. Allow the 2 minute grace period.
-- `/storage` is a volume: the baked disk is copied into a fresh volume on first use. Mount
-  a host directory there only if you want state to survive the container.
-- First boot on a fresh volume needs about a minute before SSH answers; the injector waits
-  for it, so a slow start is normal.
-
-## Credits
-
-Built on `dockurr/windows` (MIT). Windows and Tiny11 are Microsoft and NTDEV work
-respectively; this repository distributes no Microsoft binaries.
+- 进 VM 跑命令只有一条可靠通道：`python3 ~/.codex/skills/win11-docker/scripts/psx.py <ps1> [秒]`
+- 一次性验收：`psx.py ~/.codex/skills/win11-docker/scripts/verify.ps1`（激活、纯黑桌面、sshd、activate.bat）
+- 目视验证只用 `scripts/vnc_shot.py`；别用 RDP 截图（一连就抢占控制台、把桌面打到锁屏）
+- 停机保留 2 分钟优雅期，强杀可能损坏 NTFS；`windows.*` 是安装态身份，删了会触发重装
+- 把运行中的实例固化成基础镜像：`bash ~/.codex/skills/win11-docker/scripts/to_base_image.sh [实例目录]`

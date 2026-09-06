@@ -28,14 +28,6 @@ services:
       WIN11_CDP: "${WIN11_CDP:-on}"
       # 剪贴板桥：浏览器 noVNC <-> Windows 控制台双向复制粘贴（vdagent）；off 关闭
       WIN11_CLIP: "${WIN11_CLIP:-on}"
-      # midscene-pc 窗口级 AI API（guest :3333）；WIN11_MSPC=off 关闭
-      WIN11_MSPC: "${WIN11_MSPC:-on}"
-      WIN11_MSPC_TOKEN: "${WIN11_MSPC_TOKEN:-}"
-      # 模型四项统一 WIN11_MSPC_MODEL_* 命名，与注入器一一对应，无别名无回退
-      WIN11_MSPC_MODEL_BASE_URL: "${WIN11_MSPC_MODEL_BASE_URL:-}"
-      WIN11_MSPC_MODEL_API_KEY: "${WIN11_MSPC_MODEL_API_KEY:-}"
-      WIN11_MSPC_MODEL_NAME: "${WIN11_MSPC_MODEL_NAME:-gpt-5.6-luna}"
-      WIN11_MSPC_MODEL_FAMILY: "${WIN11_MSPC_MODEL_FAMILY:-gpt-5}"
     devices: [/dev/kvm, /dev/net/tun]
     cap_add: [NET_ADMIN]
     ports:
@@ -44,7 +36,6 @@ services:
       - "${WIN11_PORT_RDP:-13389}:3389/tcp"    # RDP（固定入口）
       - "${WIN11_PORT_RDP:-13389}:3389/udp"
       - "${WIN11_PORT_SSH:-10022}:22"          # SSH -> PowerShell
-      - "${WIN11_PORT_MSPC:-13333}:3333"        # midscene-pc API (dockur NAT forwards to guest)
       # Chrome CDP：默认只绑宿主回环（CDP 无鉴权）；WIN11_CDP_BIND=0.0.0.0 才对外
       - "${WIN11_CDP_BIND:-127.0.0.1}:${WIN11_PORT_CDP:-19222}:9222"
     volumes:

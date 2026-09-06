@@ -145,12 +145,13 @@ cd /home/aigc/ChatGPT/docker-w11 && python3 scripts/pssh.py scripts/xxx.ps1 270
 - 基础镜像用 `docker-compose.base.yml`（纯注入版，不挂 ./data，靠命名卷接收种子盘）；自建安装实例用 `docker-compose.yml`（安装期 USERNAME/PASSWORD 走 answer file，与运行期注入是两套凭据，变量名前缀 `WIN11_INSTALL_*` 区分开，别混）。
 - 密钥改完要生效：`docker compose -f docker-compose.base.yml up -d --force-recreate`（实测改密→SSH 改密→同步自动登录→重启一次；值没变则整轮 no-op，不重启）。
 - 只改 .env 不重建容器不会生效：注入只在容器启动时跑一次。要临时改密就重建，别去 guest 里手改（会和 .env 漂移）。
-- 端口族的默认值在 `docker-compose.base.yml`（`name: w11-13389` + 六条 ports 的 `:-` 默认值），**`.env` 里一旦留下 `WIN11_PORT_*` 就会覆盖它**（`.env.example` 现在只留注释）。并行实例用 `--env-file .env.test -p w11-test`（`.env.test` 由 `.env` 派生：密钥共用 + 实例名/端口再 +1000/独立 MSPC token，模式 600，被 `.gitignore` 的 `.env.*` 排除）。`-p` 覆盖 compose 的 `name:`，决定卷名前缀，不带就会撞主实例的卷。
-- mspc API 「宿主端口连不上」在没配 `WIN11_MSPC_TOKEN` 时是**预期行为**（注入器把 guest 绑到 127.0.0.1），不是故障；要对外必须配 token，注入器才改 HOST=0.0.0.0 并重做防火墙 hygiene。
+- 端口族的默认值在 `docker-compose.base.yml`（`name: w11-13389` + 六条 ports 的 `:-` 默认值），**`.env` 里一旦留下 `WIN11_PORT_*` 就会覆盖它**（`.env.example` 现在只留注释）。并行实例用 `--env-file .env.test -p w11-test`（`.env.test` 由 `.env` 派生：密钥共用 + 实例名/端口再 +1000，模式 600，被 `.gitignore` 的 `.env.*` 排除）。`-p` 覆盖 compose 的 `name:`，决定卷名前缀，不带就会撞主实例的卷。
 ## 9. 禁止事项（一条即返工）
 
 - **`open(path, 'w')` 包住「计算+校验+写入」整段**（本轮真实事故：deploy.md 被截成 0 字节，靠 repo/ 副本还原）。`open(path,'w')` 在求值当下就把文件清空，紧跟其后的 assert 抛异常也已经晚了。正确姿势：先在内存算出完整新内容（`out = src.replace(...)`），**所有 assert 针对 `out` 校验通过**后，最后一步才 `open(P,'w').write(out)`；动手前先 `io.open('/data/tmp/xxx.before','w').write(src)` 留快照。
 - **assert 写在 `open(...,'w')` 之后**：上一条同族。`with open(P,'r+')` + `truncate()` 也是先清后写，别拿它当安全编辑。
+- **`@(Get-ScheduledTask -TaskName X -ErrorAction SilentlyContinue | Measure-Object).Count` 当存在性判据**：任务不存在时该 cmdlet 仍向管道**显式吐一个 `$null`**，计数=1，于是「已删干净」永远被判成「还在」；同一脚本里 `$t = Get-ScheduledTask -TaskName X` 拿到的却是 `$null`，两处自相矛盾（2026-09-06 真实事故：retire 已成功——`schtasks /query` 回 rc=1、`netstat` 空、`C:\mspc` 已删——判据却报 `task=1 listen=1`，白折腾三轮）。存在性判据用 `schtasks /query /tn X 2>&1 | Out-Null; $LASTEXITCODE`（1=不存在），或 `@(Get-ScheduledTask | Where-Object { $_.TaskName -eq X }).Count`（`Where-Object` 会吃掉 null）。
+- **把 `\$` 抄进 `.ps1` 文件**（例如 `-Confirm:\$false`）：`\$` 只属于**注入器里的单引号 bash 内联串**（那层要替 PowerShell 转义），在真 `.ps1` 文件里它成了字面反斜杠+`$false`，Unregister/Remove 全部静默失败。`.ps1` 资产里写 `-Confirm:$false`、`$_.Foo` 裸写；反过来，注入器内联串里才用 `\$`。
 - 用 `cat`/heredoc/JS 模板写多行脚本文件；用 `rm -rf` 打宽泛目标；把 base64 图片塞进命令输出。
 - 在 VM 里同步跑分钟级任务；用 capability 路径装 OpenSSH；拿 `Get-WindowsCapability` 当 sshd 可用性的判据。
 - 用顶层 `view_image` 名字调工具；用 `detail: "low"`。
@@ -167,17 +168,14 @@ cd /home/aigc/ChatGPT/docker-w11 && python3 scripts/pssh.py scripts/xxx.ps1 270
 - 拿 `rfb.viewOnly=true` 的探针验收剪贴板（clipboardPasteFrom 静默 no-op = 假阴性）；把 noVNC 面板 Send 按钮当剪贴板通道（它是敲键盘 ASCII-only）；或把 guest 里 sshd/session 0 的 `Get-Clipboard` 空结果当「剪贴板桥断了」——那是另一个站点，回读要走 Interactive 任务。
 - 用 RDP 截图验证剪贴板/桌面效果（一连 RDP 就锁屏抢占控制台，先污染再观测；见 §1.3）。
 
-## 10. midscene-pc 长期维护副本（窗口级 AI 接口）
+## 10. midscene-pc / mspcServer：已移除（2026-09-06）
 
-- 唯一维护位置：`midscene-pc/`（本仓库内、独立 git 仓库，父仓库 .gitignore 已排除）。旧位置 `/home/aigc/ChatGPT/midscene-pc` 是迁移前快照，别再改它。
-- remote：`origin` = https://github.com/yorkane/midscene-pc（直接 push 目标）；`upstream` 指向同一仓库备用。改动经 VM 验证后照常 `git push origin main`。
-- 一条命令部署+验收：`scripts/mspc_sync.sh`（打包→scp→VM sync_mspc→重启 mspcServer）。可选 `--build`（先 pnpm 构建 dist）、`--e2e`（同步后在 VM 交互会话跑 `demo/win-window-api.mjs`）。判据：`rc=0` + `E2E_DONE` + `ASSERT=aiquery_contains_chinese_keywords OK`。
-- VM 侧布局：代码 `C:\mspc`（sync_mspc.ps1 只换 dist/assets/src，保留 node_modules 与 .env），工具与日志 `C:\mspc-in`，服务 = Interactive 计划任务 `mspcServer`（3333，容器重启自拉起）。宿主直连 `http://172.18.0.2:3333`。
-- 模型网关 key 只存在于 VM 的 `C:\mspc\.env`；宿主与仓库都不存副本。
-- **v4 起镜像自带 mspc payload**（latest 现为 v5 = digest ba7110b3…，含 mspc + 剪贴板桥；v4 = 1746f4c5）：每台路径 A 实例首启由注入器部署窗口 API（deploy.md §6.5）。两条路线并存不冲突：win11-en 日常热部署仍走 mspc_sync.sh；新 base 实例走 WIN11_MSPC_* 注入。payload 更新纪律：改 midscene-pc 代码 -> mspc_sync 到 win11-en 验证 -> 在 win11-en 跑 scripts/mspc_build_payload.ps1 -> tar 落 image/mspc/ -> docker build + 全新卷首启验收（deploy.md §6.5 五步链）-> push ghcr。
-- 三条实测铁律（详见 deploy.md §6.5 / 技能 pitfalls §12）：node.exe 放 `C:\mspc\bin`（UAC 过滤令牌进不了 Program Files，且失败是非终止的、try/catch 抓不住，判据必须 Test-Path）；种子盘自带 node 的 Block 防火墙规则，Block 压 Allow，注入器必须删（判据用容器侧 tcp_open guest:3333，规则计数会因 hydrate 时序骗人）；token 轮换必须连 node 进程一起重启（.env 只在启动时读，只停计划任务不停子进程 = 旧 token 继续服务）。
-- 改窗口生命周期看 `assets/W11Win.cs`（首用 csc 编译到 guest %TEMP%，改后需重启服务触发重编）。三条实测铁律：别用 `Add-Type -MemberDefinition`（Tiny11 静默不产出类型）；focus 只用温和序列（ALT 注入/AttachThreadInput/SwitchToThisWindow 会让 Chromium 窗口事后从 EnumWindows 消失、前台句柄变 0）；浏览器窗口一律 title 锚定 + `fixedWindow:false`（导航会重建 HWND，id 锁定必过期）。
-
+- 本项目**不再使用 mspc**：镜像不内置 payload，compose 不发布 3333，注入器没有部署步骤。
+- 种子盘带着 `mspcServer` 任务与 `C:\mspc` 出厂，注入器每次启动幂等拆除（`image/win11-inject.sh` 的 retire 段）；
+  判据 = 该行无 WARNING。别再往 guest 里推 node/mspc。
+- 归档 `/data/tmp/w11-ime/mspc-archive-20260906/`（payload + w11_mspc.ps1 + args 模板 + 一次性脚本）；
+  源码在 https://github.com/yorkane/midscene-pc 独立维护，与本项目解耦。
+- 需要窗口/页面级控制：CDP（`playwright-cli attach --cdp`，§1 表格）或 midscene RDP 链路；剪贴板桥/IME 输入条由 noVNC 前端 + vdagent 实现，与 mspc 无关。
 ## 11. 浏览器 <-> VM 剪贴板桥（v5 起镜像默认开，deploy.md §7.4）
 
 - 三层缺一不可：start.sh 预置 ARGUMENTS 冷插 virtio-serial（q35 拒热插）→ 注入器 SYSTEM 任务装 vioserv 驱动 + vdservice（UAC 过滤令牌干不了 pnputil/服务注册）→ noVNC 前端桥恢复人机粘贴。vda 载荷是签名官方二进制，可用 7z 从 spice-guest-tools 安装器直接抽（scripts/vda_build_payload.sh，不需要 VM）——和 node_modules「必须来自活 VM」不同级。

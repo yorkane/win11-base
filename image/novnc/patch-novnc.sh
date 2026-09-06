@@ -9,7 +9,7 @@ test -f "$HTML" || { echo "novnc-patch: $HTML missing, skip"; exit 0; }
 test -f "$BRIDGE" || { echo "novnc-patch: bridge file missing"; exit 1; }
 if grep -q "w11-clip-bridge.js" "$HTML"; then exit 0; fi
 # Content-hash query: without it browsers keep serving a stale bridge forever
-# (observed 2026-09-05: users still executed a removed `mspcSet` from cache).
+# (observed 2026-09-05: a removed function was still executed from a cached copy).
 VER=$(sha256sum "$BRIDGE" | cut -c1-8)
 sed -i "s#</body>#<script src=\"w11-clip-bridge.js?v=$VER\"></script>\n</body>#" "$HTML"
 grep -q "w11-clip-bridge.js" "$HTML" || { echo "novnc-patch: injection failed"; exit 1; }

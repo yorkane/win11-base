@@ -1,6 +1,6 @@
 # chrome_cdp.ps1 -- keep a CDP-enabled Chrome reachable on 0.0.0.0:<port> inside the
 # console session. Registered by the injector as w11CdpChrome (AtLogOn / Interactive /
-# Highest) and triggered once at deploy time; survives guest reboots (mspcServer pattern)
+# Highest) and triggered once at deploy time; survives guest reboots (logon-task supervisor pattern)
 # and supervises itself afterwards (the task never exits; a second trigger is ignored by
 # the single-instance policy -- this task IS the watchdog).
 #
@@ -19,7 +19,7 @@
 #                              >=136 refuses a debug port on the default profile too).
 # Port source of truth: C:\ProgramData\w11\cdp.port (written by the injector),
 # fallback 9222 (the shipped default; the HOST-side port is what compose parameterizes,
-# same shape as mspc: guest fixed, host mapped). Public port P, chrome internal P+1.
+# guest port fixed, host port mapped.) Public port P, chrome internal P+1.
 $ErrorActionPreference = 'Continue'
 $log = 'C:\ProgramData\w11\cdp.log'
 function Log($m) { Add-Content -Path $log -Value ((Get-Date -Format o) + ' ' + $m) }
@@ -48,7 +48,7 @@ function ProxyUp {
   } catch { return $false }
 }
 
-# --- firewall: allow the PUBLIC port; and mirror the mspc lesson -- Windows can
+# --- firewall: allow the PUBLIC port; and reuse the desktop-task lesson -- Windows can
 # --- record a per-program BLOCK rule for chrome at first bind, Block beats Allow.
 try {
   Get-NetFirewallRule -ErrorAction SilentlyContinue |

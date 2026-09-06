@@ -6,8 +6,8 @@
 #     virtserialport,name=com.redhat.spice.0  (q35 refuses hotplug, so this comes from
 #     the ARGUMENTS env of the container; without it the driver installs but never links)
 #   - payload tarball at C:/ProgramData/w11/vda-payload.tar.gz (base64-pushed by injector)
-# All settings come from the JSON sidecar pattern used by w11_mspc.ps1 is NOT needed here:
-# there are zero operator values. Everything is idempotent: re-running only fixes drift.
+# No JSON sidecar is needed here (unlike the retired mspc deployer): there are zero
+# operator values. Everything is idempotent: re-running only fixes drift.
 $ErrorActionPreference = 'Continue'
 $pdir = 'C:\ProgramData\w11'
 $dst  = 'C:\vdagent'
@@ -84,7 +84,7 @@ Start-Sleep -Seconds 3
 $svc = Get-Service -Name 'vdservice'
 $proc = @(Get-Process -Name vdagent -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -ne 0 })
 # The injector polls THIS log file, not stdout (a scheduled task's stdout goes nowhere):
-# every machine-readable verdict token must be Log-ed verbatim -- same rule as mspc.
+# every machine-readable verdict token must be Log-ed verbatim (deployer rule).
 if ($svc.Status -eq 'Running' -and $proc.Count -ge 1) {
   Log ('VDA_AGENT_UP sess=' + ($proc | Select-Object -First 1).SessionId)
   Write-Output 'VDA_AGENT_UP'

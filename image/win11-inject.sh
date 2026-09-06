@@ -16,10 +16,6 @@
 #   WIN11_CHROME         off -> skip the Chrome Enterprise install + policies
 #   WIN11_CDP            off -> skip the Chrome DevTools Protocol endpoint (guest :9222)
 #   WIN11_CLIP           off -> skip the vdagent clipboard bridge (browser <-> guest)
-#   WIN11_MSPC           off -> skip the midscene-pc API server (default: on if payload present)
-#   WIN11_MSPC_TOKEN     token for the API on :3333. Empty = bind guest loopback only.
-#   WIN11_MSPC_MODEL_BASE_URL / _API_KEY / _NAME / _FAMILY
-#                        model backend for AI endpoints (window APIs need none of these)
 #
 # The sealed disk carries a well-known initial credential, exactly like dockur ships
 # admin/admin: its only job is to let this script rotate it on first boot.
@@ -41,12 +37,6 @@ say() { printf '> win11-inject: %s\n' "$1"; }
 # every start unless the deployer opts out; credentials and KMS stay opt-in.
 DESKTOP="${WIN11_DESKTOP:-on}"
 CLIP="${WIN11_CLIP:-on}"
-MSPC="${WIN11_MSPC:-on}"
-MSPC_TOKEN="${WIN11_MSPC_TOKEN:-}"
-MSPC_GATEWAY="${WIN11_MSPC_MODEL_BASE_URL:-}"
-MSPC_MODEL_KEY="${WIN11_MSPC_MODEL_API_KEY:-}"
-MSPC_MODEL="${WIN11_MSPC_MODEL_NAME:-gpt-5.6-luna}"
-MSPC_FAMILY="${WIN11_MSPC_MODEL_FAMILY:-gpt-5}"
 
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 SSH_OPTS="$SSH_OPTS -o ConnectTimeout=10 -o PreferredAuthentications=password"
@@ -259,7 +249,7 @@ if [ -n "$KMS_HOST" ]; then
 fi
 
 # (The reboot moved to the very end of the script: rebooting mid-way used to interrupt
-#  the desktop/mspc pushes below.)
+#  the desktop pushes below.)
 
 # ---------------------------------------------------------------- desktop look
 # Black background, no desktop icons, taskbar ALWAYS VISIBLE with icons left-aligned,
@@ -401,100 +391,33 @@ if [ "$CLIP" != "off" ]; then
   fi
   ps_run "$CUR_USER" "$CUR_PASS" "$IP" '$null = Unregister-ScheduledTask -TaskName w11Vda -Confirm:$false' >/dev/null 2>&1
 fi
- 
-# ---------------------------------------------------------------- midscene-pc API server
-# A payload tarball built FROM A LIVE VM (win32 node_modules + node.exe; never npm-install
-# from a Linux image) ships inside the image. The injector pushes it over scp on the same
-# SSH channel, then a one-shot w11Mspc task (Interactive/Highest: the console session is
-# required for window APIs and screenshots) unpacks it, writes C:\mspc\.env from a
-# JSON sidecar, and registers mspcServer (AtLogOn Interactive) as the persistent API host.
-# Values NEVER travel as task arguments: they would have to survive bash -> task XML ->
-# cmd -> PowerShell and corrupt silently (the WeChat bat incident).
-if [ "$MSPC" != "off" ] && [ -f /usr/local/share/win11/mspc-payload.tar.gz ]; then
-  strict WIN11_MSPC_TOKEN "$MSPC_TOKEN" '^[A-Za-z0-9._@-]+$'
-  strict WIN11_MSPC_MODEL_BASE_URL "$MSPC_GATEWAY" '^[A-Za-z0-9./:_+-]+$'
-  strict WIN11_MSPC_MODEL_API_KEY "$MSPC_MODEL_KEY" '^[A-Za-z0-9._-]+$'
-  strict WIN11_MSPC_MODEL_NAME "$MSPC_MODEL" '^[A-Za-z0-9._-]+$'
-  strict WIN11_MSPC_MODEL_FAMILY "$MSPC_FAMILY" '^[A-Za-z0-9._-]+$'
-  if [ -n "$MSPC_TOKEN" ]; then say "deploying midscene-pc API (:3333, token-protected)"; else say "deploying midscene-pc API (:3333, no token -> guest loopback only)"; fi
-  MSPC_VERSION=$(sha256sum /usr/local/share/win11/mspc-payload.tar.gz | cut -c1-12)
-  push_asset w11_mspc.ps1
-  # Sidecar carries every injected value; rewritten on every start so a token or gateway
-  # change in .env takes effect without re-pushing the payload.
-  sed -e "s/__VERSION__/$MSPC_VERSION/" -e "s|__TOKEN__|$MSPC_TOKEN|" -e "s|__GATEWAY__|$MSPC_GATEWAY|" \
-      -e "s|__KEY__|$MSPC_MODEL_KEY|" -e "s|__MODEL__|$MSPC_MODEL|" -e "s|__FAMILY__|$MSPC_FAMILY|" \
-    /usr/local/share/win11/mspc-args.json.template > /tmp/mspc-args.json
-  grep -q '__' /tmp/mspc-args.json && { say 'ERROR: mspc template substitution failed'; exit 1; }
-  b64=$(base64 < /tmp/mspc-args.json | tr -d '\n'); rm -f /tmp/mspc-args.json
-  script="[IO.File]::WriteAllBytes('C:\\ProgramData\\w11\\mspc-args.json',[Convert]::FromBase64String('$b64')); Write-Output ARGS_OK"
-  out=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" "$script")
-  printf '%s' "$out" | grep -q ARGS_OK || { say 'ERROR: mspc args sidecar failed'; exit 1; }
-  # Firewall hygiene, run TWICE (here and after the API is up): Windows records a
-  # per-program BLOCK rule the moment node first binds a port in a new guest, and the
-  # seed disk already carries two such rules from win11-en ("Node.js JavaScript
-  # Runtime"). Block beats Allow, so the API is unreachable from outside until they are
-  # gone (found 2026-09-05). The post-UP pass catches rules created by that first bind.
-  mspc_fw_hygiene() {
-  fw="Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { \$_.DisplayName -eq 'Node.js JavaScript Runtime' -and \$_.Action -eq 'Block' } | Remove-NetFirewallRule -ErrorAction SilentlyContinue; if (-not (Get-NetFirewallPortFilter -ErrorAction SilentlyContinue | Where-Object { \$_.LocalPort -eq '3333' } | Select-Object -First 1)) { New-NetFirewallRule -DisplayName 'midscene-pc API' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3333 -Profile Any | Out-Null }; \$b = @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { \$_.Action -eq 'Block' -and \$_.Direction -eq 'Inbound' -and \$_.Enabled -eq 'True' } | Measure-Object).Count; Write-Output ('FWOK blocks=' + \$b)"
-    out=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" "$fw")
-    # Rule COUNTS are noisy (Windows hydrates them lazily around the first bind; a fresh
-    # guest counted 1 here even while the API answered from outside). The only verdict
-    # that matters is reachability, checked after the server is up below.
-    printf '%s' "$out" | grep -q 'FWOK' || say 'WARNING: firewall hygiene did not report'
-  }
-  mspc_fw_hygiene
-  # Push the tarball when the marker differs, or when it matches but the install is
-  # broken (marker written, node.exe gone) -- self-heal instead of a mystery DOWN.
-  have=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" '$m = ""; if (Test-Path "C:\mspc\.mspc-version") { $m = (Get-Content "C:\mspc\.mspc-version" -First 1).Trim() }; $n = Test-Path "C:\mspc\bin\node.exe"; Write-Output ("MARKER=" + $m + " NODE=" + $n)')
-  if printf '%s' "$have" | grep -q "MARKER=$MSPC_VERSION NODE=True"; then
-    say "payload $MSPC_VERSION already on disk (not re-pushed)"
-  else
-    say "pushing mspc payload $MSPC_VERSION (~80 MB, one time) ..."
-    printf '%s' "$CUR_PASS" > /tmp/.mspc_pw; chmod 600 /tmp/.mspc_pw
-    sshpass -f /tmp/.mspc_pw scp -P 22 -q $SSH_OPTS -o StrictHostKeyChecking=no \
-      /usr/local/share/win11/mspc-payload.tar.gz "$CUR_USER@$IP:C:/ProgramData/w11/mspc-payload.tar.gz"
-    scp_rc=$?; rm -f /tmp/.mspc_pw
-    [ $scp_rc -eq 0 ] || { say "ERROR: mspc payload push failed (rc=$scp_rc)"; exit 1; }
-  fi
-  reg='if (Test-Path C:\ProgramData\w11\mspc-deploy.log) { Remove-Item C:\ProgramData\w11\mspc-deploy.log -Force }; $null = Register-ScheduledTask -TaskName w11Mspc -Action (New-ScheduledTaskAction -Execute cmd.exe -Argument "/c powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\w11\w11_mspc.ps1 > C:\ProgramData\w11\mspc-once.log 2>&1") -Principal (New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest) -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10)) -Force; Start-ScheduledTask -TaskName w11Mspc; Write-Output ONESHOT_STARTED'
-  ps_run "$CUR_USER" "$CUR_PASS" "$IP" "$reg" | grep -q ONESHOT_STARTED || { say 'ERROR: mspc deploy task not started'; exit 1; }
-  i=0
-  while [ $i -lt 36 ]; do
-    i=$((i+1)); sleep 5
-    v=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" 'Get-Content C:\ProgramData\w11\mspc-deploy.log -ErrorAction SilentlyContinue | Select-Object -Last 3')
-    if printf '%s' "$v" | grep -q 'MSPC_API=.* UP'; then
-      # The very first bind may have made Windows file a fresh block rule for node.exe;
-      # sweep again now that it exists, then prove the API answers from OUTSIDE the guest
-      # (host-side port-forward is what operators use; a guest-local check would be blind
-      # to exactly the failure this hygiene prevents).
-      mspc_fw_hygiene
-      # Prove the API answers from OUTSIDE the guest: reaching guest:3333 from this
-      # container is the same vantage an operator's port-forward uses, so it catches
-      # exactly the seed-carried block-rule failure.
-     if tcp_open "$IP" 3333; then say 'midscene-pc API up and reachable on :3333'
-     else say 'WARNING: mspc API listening but unreachable through the NAT (firewall?)'; fi
-     APPLIED="$APPLIED mspc"; break
-   fi
-    if printf '%s' "$v" | grep -q 'MSPC_API=DOWN'; then
-      # A fresh volume unpacks ~80 MB before node binds; the deploy script gives up
-      # sooner than that finishes. One grace round of reachability polls before
-      # crying wolf (first-boot DOWN verdicts were observed to self-heal seconds later).
-      grace=0
-      while [ $grace -lt 12 ]; do
-        grace=$((grace+1)); sleep 5
-        if tcp_open "$IP" 3333; then break; fi
-      done
-      if tcp_open "$IP" 3333; then
-        say 'midscene-pc API up and reachable on :3333 (after grace)'; APPLIED="$APPLIED mspc"
-      else
-        say "WARNING: mspc deployed but API down (see C:\ProgramData\w11\mspc-server.log)"
-      fi
-      break
-    fi
-    if printf '%s' "$v" | grep -q 'ERROR:'; then say "ERROR: mspc deploy failed: $v"; exit 1; fi
-  done
-    ps_run "$CUR_USER" "$CUR_PASS" "$IP" '$null = Unregister-ScheduledTask -TaskName w11Mspc -Confirm:$false' >/dev/null 2>&1
-fi
+
+# ---------------------------------------------------------------- retire midscene-pc
+# The seed disk was baked while the window API still existed, so a fresh volume arrives
+# with C:\mspc plus an mspcServer logon task that relaunches node on :3333. The image
+# no longer ships the payload and compose no longer publishes 3333, but the guest-side
+# leftovers must go. Unregistering another user's task, deleting C:\mspc and touching
+# the firewall are all denied to the UAC-filtered SSH token, so the removal runs as a
+# SYSTEM one-shot task (same reason the chrome and vdagent installs do). The verdict is
+# read back from a SEPARATE ssh call. The verdict must test the OBJECT, not a count:
+# under -ErrorAction SilentlyContinue a missing task still pushes one $null through the
+# pipeline, so @(Get-ScheduledTask -TaskName x | Measure-Object).Count reports 1 for a
+# task that is already gone (measured 2026-09-06: retire had succeeded -- schtasks rc=1,
+# netstat empty, C:\mspc deleted -- while the cmdlet count insisted task=1).
+# Where-Object { $_ } drops those nulls before counting.
+# No single quotes anywhere inside the single-quoted bash strings below.
+push_asset w11_retire.ps1
+retire_reg='if (Test-Path C:\ProgramData\w11\retire.log) { Remove-Item C:\ProgramData\w11\retire.log -Force }; $null = Register-ScheduledTask -TaskName w11Retire -Action (New-ScheduledTaskAction -Execute cmd.exe -Argument "/c powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\w11\w11_retire.ps1 > C:\ProgramData\w11\retire-once.log 2>&1") -Principal (New-ScheduledTaskPrincipal -UserId SYSTEM -LogonType ServiceAccount -RunLevel Highest) -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 3)) -Force; Start-ScheduledTask -TaskName w11Retire; Write-Output RETIRE_STARTED'
+ps_run "$CUR_USER" "$CUR_PASS" "$IP" "$retire_reg" | grep -q RETIRE_STARTED || say 'WARNING: retire task not started'
+retire_check='if (-not (Select-String -Path C:\ProgramData\w11\retire.log -Pattern RETIRED.done -Quiet -ErrorAction SilentlyContinue)) { Write-Output RETIRED.pending; exit }; $t = @(Get-ScheduledTask | Where-Object { \$_.TaskName -eq mspcServer }).Count; $n = @(Get-NetTCPConnection -LocalPort 3333 -State Listen -ErrorAction SilentlyContinue | Where-Object { \$_ }).Count; $p = @(Get-Process node -ErrorAction SilentlyContinue | Where-Object { \$_ }).Count; Write-Output "RETIRED task=$t listen=$n node=$p dir=$(Test-Path C:\mspc)"'
+retire_out=''
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  sleep 3
+  retire_out=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" "$retire_check")
+  if printf '%s' "$retire_out" | grep -q 'RETIRED task=0 listen=0 node=0 dir=False'; then break; fi
+done
+printf '%s' "$retire_out" | grep -q 'RETIRED task=0 listen=0 node=0 dir=False' || say "WARNING: midscene-pc leftovers still present ($retire_out)"
+ps_run "$CUR_USER" "$CUR_PASS" "$IP" '$null = Unregister-ScheduledTask -TaskName w11Retire -Confirm:$false' >/dev/null 2>&1
 
 # ---------------------------------------------------------------- reboot once (last step)
 if [ "$CHANGED" -eq 1 ]; then
