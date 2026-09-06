@@ -17,9 +17,10 @@
 //      one; users type with the BROWSER-side IME. Enter pushes the composed text via
 //      the clipboard channel, closes the bar and hands focus back to the VM -- the
 //      user presses Ctrl+V there (their measured-fast path; 2026-09-06: 'VNC 打字很
-//      快，复制粘贴也很快', auto-paste variants were the only slow thing). While the
-//      bar is open the browser owns the keyboard (imeGuard) so pinyin letters never
-//      leak to the guest as keystrokes.
+//      快，复制粘贴也很快', auto-paste variants were the only slow thing). Focus
+//      routing is plain browser semantics: composing keeps focus in the box, a click
+//      on the canvas hands the keyboard back to the VM. The bridge NEVER swallows
+//      keys or grabs focus outside the box (v7.1 -- imeGuard caused VM keyboard loss).
 (function () {
   "use strict";
   var lastSent = null;
@@ -121,6 +122,12 @@
   function imeClose() {
     if (!bar) return;
     bar.style.display = "none";
+    // Hand the keyboard back to the VM: drop the input first, then focus the canvas
+    // (noVNC's Keyboard listener is bound to it; rfb.focus() is exactly canvas.focus).
+    // NEVER synthesise a mousedown here: rfb.js binds focusCanvas to mousedown, so a
+    // press without a matching release leaves the guest with a stuck mouse button
+    // (done 2026-09-06, made focus behaviour worse -- reverted).
+    if (barInput) { try { barInput.blur(); } catch (e) {} }
     var r = rfb();
     if (r && r.focus) { try { r.focus(); } catch (e) {} }
   }
@@ -139,44 +146,46 @@
     // old ladder is what made pastes empty or late). The push happens on BOTH paths;
     // a 2026-09-06 regression moved it inside the paste branch and silently broke
     // 'only to clipboard'.
-    try { r.clipboardPasteFrom(t); } catch (e) { return; }
-    // Phrase spent: clear the box (no silent concatenation next round), then hand
-    // the keyboard to the VM so the very next Ctrl+V -- wherever the caret sits --
-    // is the guest's. imeClose() refocuses the RFB canvas.
+    // v5 regression revisited: even a FAILED submit must close the bar and clear --
+    // a half-open state must never exist, it is what trapped users before.
     barInput.value = "";
+    try { if (t) r.clipboardPasteFrom(t); } catch (e) {}
     imeClose();
   }
 
-  // ---- IME-mode guard ------------------------------------------------------
-  // While the bar is OPEN the browser owns the keyboard: clicks still reach the VM
-  // (caret placement), keystrokes on the canvas are swallowed (noVNC would forward
-  // raw pinyin letters as ASCII) and focus is pulled back -- noVNC refocuses its
-  // canvas ~100ms after mousedown, hence the deferred re-focus below.
-  function imeToggle(e) {
-    if (bar && bar.style.display !== "none") imeClose(); else imeOpen();
-    if (e) { e.preventDefault(); e.stopPropagation(); }
-  }
-  function imeGuard(e) {
-    // hotkey works in BOTH states, tested BEFORE the visibility guard; only keydown
-    // toggles (keyup of the same combo would immediately toggle back).
-    if (e.ctrlKey && e.altKey && (e.code === "KeyM" || e.key === "m" || e.key === "M")) {
-      if (e.type === "keydown") imeToggle(e); else { e.preventDefault(); e.stopPropagation(); }
+  // ---- hotkey --------------------------------------------------------------
+  // ONLY Ctrl+Alt+M is intercepted, nothing else. The old imeGuard -- swallowing
+  // every key while the bar was 'open' and yanking focus back on every mousedown --
+  // was a keyboard hostage machine: any desync left the VM deaf (user report
+  // 2026-09-06: 'keyboard dead, state stuck, only Ctrl+Alt+M recovers'). Native
+  // focus routing is sufficient: keystrokes go wherever the caret is -- composing
+  // in the box, VM typing after clicking the canvas. No guard needed.
+  // The VM sees the Ctrl and Alt keydowns before we can know a combo is coming, so it
+  // MUST see their keyups too -- swallowing them is what left the guest with Ctrl+Alt
+  // HELD (measured: typing 'AFTERBAR' afterwards opened a browser link popup; earlier
+  // variants typed a lone EUR sign). Only M is ours: swallow its keydown and keyup,
+  // let the modifiers through untouched so the guest's state stays balanced.
+  var swallowM = false;
+  function imeHotkey(e) {
+    var isM = (e.code === "KeyM" || e.key === "m" || e.key === "M");
+    if (swallowM && e.type === "keyup" && isM) {
+      e.preventDefault();
+      e.stopPropagation();
+      swallowM = false;
       return;
     }
-    if (!bar || bar.style.display === "none") return;
-    if (e.target === barInput) return;
-    if (e.key === "Escape") { imeToggle(e); return; }
-    e.preventDefault(); e.stopPropagation();
-    if (barInput) { try { barInput.focus(); } catch (x) {} }
+    if (!(e.ctrlKey && e.altKey && isM)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "keydown") {
+      swallowM = true;
+      if (bar && bar.style.display !== "none") imeClose(); else imeOpen();
+    }
   }
-  document.addEventListener("keydown", imeGuard, true);
-  document.addEventListener("keyup", imeGuard, true);
-  document.addEventListener("keypress", imeGuard, true);
-  document.addEventListener("paste", imeGuard, true);
-  document.addEventListener("mousedown", function (e) {
-    if (!bar || bar.style.display === "none" || e.target === barInput) return;
-    setTimeout(function () { if (bar && bar.style.display !== "none") { try { barInput.focus(); } catch (x) {} } }, 0);
-  }, true);
+  document.addEventListener("keydown", imeHotkey, true);
+  document.addEventListener("keyup", imeHotkey, true);
+  // Safety net: a lost keyup (alt-tab, blur) must not strand the M-swallow state.
+  window.addEventListener("blur", function () { swallowM = false; });
 
   // attach the RFB listener as soon as a session exists (UI.rfb is recreated per connect)
   var seen = null;
