@@ -21,7 +21,8 @@ if (Test-Path 'C:\mspc') {
   Remove-Item 'C:\mspc' -Recurse -Force
   Log 'RETIRED pass: stopped node and removed C:\mspc'
 }
-foreach ($f in @('mspc_server.ps1', 'mspc-args.json', 'mspc-deploy.log', 'mspc-once.log', 'mspc-server.log')) {
+foreach ($f in @('mspc_server.ps1', 'w11_mspc.ps1', 'mspc-args.json', 
+       'mspc-deploy.log', 'mspc-once.log', 'mspc-server.log')) {
   Remove-Item (Join-Path $pdir $f) -Force -ErrorAction SilentlyContinue
 }
 Log 'RETIRED done'
