@@ -27,7 +27,8 @@ COPY win11-inject.sh /usr/local/bin/win11-inject
 # VISIBLE (mirror of the old hidden ladder, same calibration discipline).
 # w11_mspc.ps1 + its JSON template configure the midscene-pc API server in the guest.
 # vda_install.ps1 wires up the browser <-> Windows clipboard bridge (with vda payload).
-COPY w11_desktop.ps1 tb_ensure_shown.ps1 w11_mspc.ps1 mspc-args.json.template vda_install.ps1 chrome_install.ps1 /usr/local/share/win11/
+# chrome_cdp.ps1 keeps a CDP-enabled Chrome (port 9222) running in the console session.
+COPY w11_desktop.ps1 tb_ensure_shown.ps1 w11_mspc.ps1 mspc-args.json.template vda_install.ps1 chrome_install.ps1 chrome_cdp.ps1 /usr/local/share/win11/
 # dockur sources /run/start.sh as its very first action inside /run/entry.sh and invites
 # exactly this override. The hook detaches the injector, so Windows boots in parallel with
 # the wait loop instead of being delayed by it.

@@ -19,6 +19,10 @@ run time from your local `.env` and are not part of the image.
   (`WIN11_CHROME=off` skips the install). Nothing else third-party is installed
   (the window API below runs on a self-contained `node.exe` inside `C:\mspc`,
   not an installed runtime)
+- Chrome DevTools Protocol on guest `:9222`, published as `WIN11_PORT_CDP`: a persistent
+  logon task launches and supervises Chrome on the visible desktop, so any CDP client
+  (`puppeteer.connect`, Playwright, chrome-devtools) can drive the real browser.
+  `WIN11_CDP=off` skips the endpoint (`WIN11_CHROME=off` implies it)
 - `C:\activate.bat` for re-activation
 - Optional window-level AI API (midscene-pc): HTTP on guest `:3333`, started as the
   `mspcServer` logon task, reachable through the published port when a token is set
@@ -45,6 +49,22 @@ The token travels as a query parameter (that is what the server checks; a wrong 
 missing token gets HTTP 401). Endpoints include `/api/windows`, window focus/minimize/
 close, screenshots, and AI actions when a gateway is configured.
 
+Chrome CDP is on the published port (default `9222`). Verify it and point a client at it:
+
+    curl http://127.0.0.1:<WIN11_PORT_CDP>/json/version
+
+    // puppeteer-core
+    const browser = await puppeteer.connect({
+      browserWSEndpoint: (await fetch("http://127.0.0.1:<WIN11_PORT_CDP>/json/version")
+        .then(r => r.json())).webSocketDebuggerUrl,
+    });
+
+The published port forwards to the guest CDP port unchanged, so a remote client
+connects to `ws://<host>:<WIN11_PORT_CDP>/devtools/page/<id>`.
+Inside the guest, Chrome itself listens on `127.0.0.1:9223` and a portproxy rule owns `0.0.0.0:9222` for the container NAT (Chrome >=136 refuses to bind
+DevTools beyond loopback). Change the guest port by writing it to `C:\ProgramData\w11\cdp.port` and
+restarting the `w11CdpChrome` task; the published host port stays what you mapped.
+
 Prefer `docker run`? Pass the same variables with `-e`, or keep them in a file and use
 `--env-file` (one `KEY=VALUE` per line, no shell syntax):
 
@@ -70,6 +90,9 @@ only); `.gitignore` keeps the real `.env` out of git. Give it mode 600.
 | `WIN11_INJECT_TIMEOUT` | seconds to wait for the guest, default 900 |
 | `WIN11_DESKTOP` | `off` keeps the stock desktop; default applies black background, no icons, always-visible taskbar (left-aligned, no search, no Store pin) |
 | `WIN11_CHROME` | `off` skips the Chrome Enterprise install (offline MSI + sign-in/translate/new-tab policies) |
+| `WIN11_CDP` | `off` skips the Chrome DevTools endpoint; default runs supervised Chrome with CDP on guest `:9222` |
+| `WIN11_PORT_CDP` | published host port for CDP (default 9222) |
+| `WIN11_CDP_BIND` | host interface to publish CDP on; default `127.0.0.1` (CDP has no auth) |
 | `WIN11_RAM_SIZE` / `WIN11_CPU_CORES` / `WIN11_DISK_SIZE` | VM sizing |
 | `WIN11_CLIP` | `off` disables the browser<->VM clipboard bridge (no vdagent install, no virtio-serial device) |
 | `WIN11_MSPC` | `off` skips the window API; default deploys it (adds ~80 MB to the image, unpacked on first boot) |

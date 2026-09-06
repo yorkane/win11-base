@@ -131,6 +131,7 @@ cd /home/aigc/ChatGPT/docker-w11 && python3 scripts/pssh.py scripts/xxx.ps1 270
 - 镜像里不许出现明文口令或私人 KMS 地址：账户名、密码、KMS 一律走 `docker run -e WIN11_USER / WIN11_PASSWORD / WIN11_KMS[_KEY]`，由 `image/win11-inject.sh` 在启动时推进 guest。种子盘那个 aigc/aigc 只是首登钥匙（等同 dockur 自带的 admin/admin），别把它当成这台机器当前的密码写进文档或脚本。
 - 改 dockur 镜像的启动行为只用它留的口子：`/run/start.sh` 钩子（`entry.sh` 第一件事就 source 它）。钩子里跑长任务必须后台 `&`，否则会把 qemu 启动一起堵住。别改 `/run/*.sh` 里的其它文件，升级底座时全会被覆盖。
 - 桌面形态（v11 定稿：纯黑/无图标/任务栏**常显**+左对齐+无搜索+无商店图钉）做在**注入器层**（`image/w11_desktop.ps1` + `tb_ensure_shown.ps1` 推到 C:\ProgramData\w11，注册 `w11DeskHide` 登录任务并立即触发；`WIN11_DESKTOP=off` 关）。TaskbarAl/搜索/NoDesktop 是注册表（永久）；常显开关是运行态，每次开机重放。别烘注册表 hive 或种子盘：任务又是 HKLM+交互会话对象，只能每台 VM 由注入器注册。**SSH（UAC 过滤令牌）实测能注册并触发 Interactive/Highest 计划任务**，不必借 SYSTEM。TaskbarAl 语义 **0=左 1=中**（微软文档；写反一次的教训）。商店图钉：TaskbarDa 在 26100 上不生效（实测），有效路线 = Shell.Application → shell:AppsFolder → WindowsStore 的 Unpin verb DoIt()。任务栏判据只认像素（deploy.md §6）。
+- Chrome CDP（v12）：chrome >=136 **拒绝把 DevTools 绑到非回环**（`--remote-debugging-address=0.0.0.0` 静默无效，实测），正确架构 = chrome 绑 `127.0.0.1:9223` + 提权任务下 `netsh portproxy` 拥有 `0.0.0.0:9222`；WS 必须 `--remote-allow-origins=*`；调试端口不许落在默认 profile（`--user-data-dir` 专用目录）。常驻 = w11CdpChrome（Interactive/Highest，ExecutionTimeLimit 0，脚本自带 supervisor 循环）。权威判据 = 容器侧 tcp + HTTP `/json/version`，guest 内回环探测看不见 portproxy 那层的防火墙判定。详见 deploy.md §6.7。
 - 注入的每一步都要写完读回来，且只用可信数据源：`if ($?)` 会被前面任何 `-ErrorAction SilentlyContinue` 的失败打成 false（本项目据此误判过自动登录没写进去）；`cscript //b slmgr.vbs /dli` 在非控制台管道里一个字符都不吐，激活状态只能用 `Get-CimInstance SoftwareLicensingProduct` 的 `LicenseStatus`（1=已授权）判。
 - 从 guest 读回来的字符串先 `tr -d '\r'` 再比较。Windows 回 CRLF，命令替换只吃换行不吃回车符，于是精确等值比较永远失败而子串 grep 一切正常；这类 bug 只会表现为明明成功了却每轮重复执行。
 - 传给 guest 的值先过字符白名单，再动任何写操作；白名单用 `grep -qE '^[A-Za-z0-9._@-]+$'`（正则写死成字面量、值走 stdin）。bash `case` 的字符类不能从变量取允许集：引号包住的 `A-Z` 在字符类里只匹配字面 A、-、Z，正常用户名反而被拒绝。
@@ -153,6 +154,7 @@ cd /home/aigc/ChatGPT/docker-w11 && python3 scripts/pssh.py scripts/xxx.ps1 270
 - 把口令或私人 KMS 地址写进镜像 ENV / 镜像内容；把 GHCR 包当仓库看待（包可见性 REST 改不动，404 之后反复重试或试图用 UI 自动化点按钮）。
 - 相信从 guest 读回来的原始字符串（不做 tr -d '\r' 就等值比较）；相信 if ($?) 与 slmgr /dli 在管道里的输出。
 - 用 `ABM_GETSTATE` / `GetWindowRect` 判断任务栏是否自动隐藏（开机场景两者会同时报"已隐藏"而屏幕上任务栏照在）；桌面形态类改动的判据是 `vnc_shot.py` 帧的底部像素，不是 API 读数。详见 `win11_init.md`。
+- `Register-ScheduledTask -Settings` 里 `RestartInterval` 单独出现（没有 `-RestartCount`）会让任务 XML 缺元素、注册静默失败（0x80041319）；`-Force` 与后续 `Start-ScheduledTask` 都不报错，判据必须是 `Get-ScheduledTask` 回读 TaskName。
 - 在 SYSTEM 任务或 sshd 子进程里 `Start-Process explorer.exe`（起进 session 0，桌面从此没有任务栏，必须回交互会话救）；或在函数里用 `Write-Output` 打诊断还指望它的返回值当布尔。
 - 用 `aiAct` 做滚动或点一个命名目标：它走 plan/replan 循环，多付一次带截图的规划调用，还会在 replanning 上限处 rc=1（见 §1.4）。同理别指望顶层 `enable_thinking` 能关掉 llama.cpp 的思考，它不认这个字段。
 - 从 midscene 报告 HTML 里读截图尺寸来判断 `desktopWidth/Height` 生效没有：那里混有模板素材图，必须用 `RDPDevice.size()` 或直接抓 PNG 读 IHDR。

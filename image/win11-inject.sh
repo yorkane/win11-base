@@ -14,6 +14,7 @@
 #   WIN11_INJECT_TIMEOUT seconds to wait for the guest (default: 900)
 #   WIN11_DESKTOP        off -> keep the stock desktop (icons, centered taskbar, search)
 #   WIN11_CHROME         off -> skip the Chrome Enterprise install + policies
+#   WIN11_CDP            off -> skip the Chrome DevTools Protocol endpoint (guest :9222)
 #   WIN11_CLIP           off -> skip the vdagent clipboard bridge (browser <-> guest)
 #   WIN11_MSPC           off -> skip the midscene-pc API server (default: on if payload present)
 #   WIN11_MSPC_TOKEN     token for the API on :3333. Empty = bind guest loopback only.
@@ -333,6 +334,36 @@ if [ "$CHROME" != "off" ] && [ -f /usr/local/share/win11/ChromeEnt64.msi ]; then
   fi
 fi
 
+
+# ---------------------------------------------------------------- chrome CDP
+# Chrome DevTools Protocol on guest :9222, exposed through the published container
+# port (WIN11_PORT_CDP). A persistent Interactive/Highest task (w11CdpChrome) launches
+# and supervises Chrome in the CONSOLE session -- Chrome must live on the visible
+# desktop to be useful for GUI automation, and session 0 would strand it. CDP is
+# unauthenticated by design: anyone who can reach the published port controls the
+# browser, so the compose default binds it to 127.0.0.1 only.
+CHROME_CDP="${WIN11_CDP:-on}"
+if [ "$CHROME_CDP" != "off" ]; then
+  say 'ensuring Chrome CDP on guest :9222'
+  push_asset chrome_cdp.ps1
+  cdp_reg='if (Test-Path C:\ProgramData\w11\cdp.log) { Remove-Item C:\ProgramData\w11\cdp.log -Force }; $null = Register-ScheduledTask -TaskName w11CdpChrome -Action (New-ScheduledTaskAction -Execute powershell.exe -Argument "-NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\w11\chrome_cdp.ps1" -WorkingDirectory C:\ProgramData\w11) -Principal (New-ScheduledTaskPrincipal -UserId @@WUSER@@ -LogonType Interactive -RunLevel Highest) -Trigger (New-ScheduledTaskTrigger -AtLogOn -User @@WUSER@@) -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)) -Force; $x = Get-ScheduledTask -TaskName w11CdpChrome; Write-Output ("TASK=" + $x.TaskName); Start-ScheduledTask -TaskName w11CdpChrome; Write-Output CDP_TASK_STARTED'
+  cdp_reg="${cdp_reg//@@WUSER@@/$(psq "$CUR_USER")}"
+  out=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" "$cdp_reg")
+  printf '%s' "$out" | grep -q CDP_TASK_STARTED || say "WARNING: cdp task not registered: $(printf '%s' "$out" | tr '\r\n' ' ')"
+  i=0
+  up=0
+  while [ $i -lt 12 ]; do
+    i=$((i+1)); sleep 5
+    if tcp_open "$IP" 9222; then up=1; break; fi
+  done
+  if [ $up -eq 1 ]; then
+    say 'Chrome CDP reachable on guest :9222'; APPLIED="$APPLIED cdp"
+  else
+    tail=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" 'Get-Content C:\ProgramData\w11\cdp.log -ErrorAction SilentlyContinue | Select-Object -Last 3')
+    say "WARNING: Chrome CDP not reachable on guest :9222 after 60s (last: $(printf '%s' "$tail" | tr '\r\n' ' '))"
+  fi
+fi
+
 # ---------------------------------------------------------------- clipboard bridge (vdagent)
 # QEMU already carries the virtio-serial chardev (image/start.sh appends it to ARGUMENTS
 # unless WIN11_CLIP=off). The guest half -- vioserial driver + vdservice/vdagent -- is
@@ -440,11 +471,26 @@ if [ "$MSPC" != "off" ] && [ -f /usr/local/share/win11/mspc-payload.tar.gz ]; th
       # Prove the API answers from OUTSIDE the guest: reaching guest:3333 from this
       # container is the same vantage an operator's port-forward uses, so it catches
       # exactly the seed-carried block-rule failure.
-      if tcp_open "$IP" 3333; then say 'midscene-pc API up and reachable on :3333'
-      else say 'WARNING: mspc API listening but unreachable through the NAT (firewall?)'; fi
-      APPLIED="$APPLIED mspc"; break
+     if tcp_open "$IP" 3333; then say 'midscene-pc API up and reachable on :3333'
+     else say 'WARNING: mspc API listening but unreachable through the NAT (firewall?)'; fi
+     APPLIED="$APPLIED mspc"; break
+   fi
+    if printf '%s' "$v" | grep -q 'MSPC_API=DOWN'; then
+      # A fresh volume unpacks ~80 MB before node binds; the deploy script gives up
+      # sooner than that finishes. One grace round of reachability polls before
+      # crying wolf (first-boot DOWN verdicts were observed to self-heal seconds later).
+      grace=0
+      while [ $grace -lt 12 ]; do
+        grace=$((grace+1)); sleep 5
+        if tcp_open "$IP" 3333; then break; fi
+      done
+      if tcp_open "$IP" 3333; then
+        say 'midscene-pc API up and reachable on :3333 (after grace)'; APPLIED="$APPLIED mspc"
+      else
+        say "WARNING: mspc deployed but API down (see C:\ProgramData\w11\mspc-server.log)"
+      fi
+      break
     fi
-    if printf '%s' "$v" | grep -q 'MSPC_API=DOWN'; then say "WARNING: mspc deployed but API down (see C:\ProgramData\w11\mspc-server.log)"; break; fi
     if printf '%s' "$v" | grep -q 'ERROR:'; then say "ERROR: mspc deploy failed: $v"; exit 1; fi
   done
     ps_run "$CUR_USER" "$CUR_PASS" "$IP" '$null = Unregister-ScheduledTask -TaskName w11Mspc -Confirm:$false' >/dev/null 2>&1

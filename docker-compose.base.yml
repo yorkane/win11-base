@@ -24,6 +24,8 @@ services:
       WIN11_DESKTOP: "${WIN11_DESKTOP:-on}"
       # Chrome Enterprise（离线 MSI + 策略：无登录框/无翻译提示，直达新标签页）；off 跳过
       WIN11_CHROME: "${WIN11_CHROME:-on}"
+      # Chrome DevTools Protocol（guest :9222）；off 跳过。CDP 无鉴权，谁能连端口谁控制浏览器
+      WIN11_CDP: "${WIN11_CDP:-on}"
       # 剪贴板桥：浏览器 noVNC <-> Windows 控制台双向复制粘贴（vdagent）；off 关闭
       WIN11_CLIP: "${WIN11_CLIP:-on}"
       # midscene-pc 窗口级 AI API（guest :3333）；WIN11_MSPC=off 关闭
@@ -41,6 +43,8 @@ services:
       - "${WIN11_PORT_RDP:-3389}:3389/udp"
       - "${WIN11_PORT_SSH:-2222}:22"         # SSH -> PowerShell
       - "${WIN11_PORT_MSPC:-3333}:3333"       # midscene-pc API (dockur NAT forwards to guest)
+      # Chrome CDP：默认只绑宿主回环（CDP 无鉴权）；WIN11_CDP_BIND=0.0.0.0 才对外
+      - "${WIN11_CDP_BIND:-127.0.0.1}:${WIN11_PORT_CDP:-9222}:9222"
     volumes:
       - win11-storage:/storage   # 种子盘首次使用时复制进卷；换目录挂载可持久化
       - /etc/localtime:/etc/localtime:ro
