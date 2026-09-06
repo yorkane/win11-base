@@ -99,7 +99,7 @@ cd /home/aigc/ChatGPT/docker-w11 && python3 scripts/pssh.py scripts/xxx.ps1 270
 |---|---|
 | OpenSSH Server（FOD capability） | `Add-WindowsCapability` / `DISM /Add-Capability` 在本实例不可用：provision 期 `0x80072ee6`（容器内透明代理干扰 FOD 源），SSH 管理员会话重试 `Access is denied`（令牌被 UAC 过滤）。**改用微软官方便携包 Win32-OpenSSH**，`sshd.exe /install-sshd` 注册服务，效果等价，别再重试 capability 路径 |
 | 校验 ssh 是否真可用 | `Get-WindowsCapability` 显示 `NotPresent` 是**正常**的（服务不是 FOD 装的）；判据是 `Get-Service sshd` = Running/Automatic + 真跑一次远程 PS 脚本 |
-| 第三方软件 | 本实例要求**零第三方软件**；卸载表里 `Microsoft Edge WebView2 Runtime` 属系统组件，不算违规，别为了干净去删它 |
+| 第三方软件 | v11 起镜像自带 **Chrome Enterprise**（离线 MSI + HKLM 策略，`WIN11_CHROME=off` 关）；除此之外零第三方软件。卸载表允许：WebView2 Runtime（系统组件，别删）、Google Chrome（含 Google Update 服务）。多装别的先问 |
 | 装带 GUI 的第三方软件（微信等） | 分两步：SYSTEM 后台任务从 SMB 取包，再注册 `LogonType Interactive` 的计划任务以登录用户身份跑 `/S`。SYSTEM 装会把 `.lnk` 与 HKCU 注册项落进 SYSTEM 配置；SSH 子进程在 session 0，启动的 GUI 永远看不见。见 `../docker-w11-wx/scripts/wx_install.ps1` |
 | 宿主机缺 qemu-img | 借镜像：`docker run --rm -v $PWD/data:/store --entrypoint sh dockurr/windows:latest -c 'qemu-img convert -c -O qcow2 ...'`（版本 11.1.0）。别为了转格式在宿主装 qemu-utils |
 | 下载模型/视频素材 | 走全局约定的技能与代理：模型用 hf-download（ModelScope 优先，限流要退避），视频用 ytb；本机 HTTP 代理 `127.0.0.1:7890`。单文件 aria2c 至少 5 并发并核对文件名 |
@@ -130,7 +130,7 @@ cd /home/aigc/ChatGPT/docker-w11 && python3 scripts/pssh.py scripts/xxx.ps1 270
 
 - 镜像里不许出现明文口令或私人 KMS 地址：账户名、密码、KMS 一律走 `docker run -e WIN11_USER / WIN11_PASSWORD / WIN11_KMS[_KEY]`，由 `image/win11-inject.sh` 在启动时推进 guest。种子盘那个 aigc/aigc 只是首登钥匙（等同 dockur 自带的 admin/admin），别把它当成这台机器当前的密码写进文档或脚本。
 - 改 dockur 镜像的启动行为只用它留的口子：`/run/start.sh` 钩子（`entry.sh` 第一件事就 source 它）。钩子里跑长任务必须后台 `&`，否则会把 qemu 启动一起堵住。别改 `/run/*.sh` 里的其它文件，升级底座时全会被覆盖。
-- 桌面形态（纯黑/无图标/任务栏自动隐藏）做在**注入器层**（`image/w11_desktop.ps1` + `tb_ensure_hidden.ps1` 推到 C:\ProgramData\w11，注册 `w11DeskHide` 登录任务并立即触发；`WIN11_DESKTOP=off` 关）。别试图烘进注册表 hive 或种子盘：任务栏状态不落盘，任务又是 HKLM+交互会话对象，只能每台 VM 由注入器/脚本注册。**SSH（UAC 过滤令牌）实测能注册并触发 Interactive/Highest 计划任务**，不必借 SYSTEM。任务栏判据只认像素且要悬停反证（deploy.md §6）。
+- 桌面形态（v11 定稿：纯黑/无图标/任务栏**常显**+左对齐+无搜索+无商店图钉）做在**注入器层**（`image/w11_desktop.ps1` + `tb_ensure_shown.ps1` 推到 C:\ProgramData\w11，注册 `w11DeskHide` 登录任务并立即触发；`WIN11_DESKTOP=off` 关）。TaskbarAl/搜索/NoDesktop 是注册表（永久）；常显开关是运行态，每次开机重放。别烘注册表 hive 或种子盘：任务又是 HKLM+交互会话对象，只能每台 VM 由注入器注册。**SSH（UAC 过滤令牌）实测能注册并触发 Interactive/Highest 计划任务**，不必借 SYSTEM。TaskbarAl 语义 **0=左 1=中**（微软文档；写反一次的教训）。商店图钉：TaskbarDa 在 26100 上不生效（实测），有效路线 = Shell.Application → shell:AppsFolder → WindowsStore 的 Unpin verb DoIt()。任务栏判据只认像素（deploy.md §6）。
 - 注入的每一步都要写完读回来，且只用可信数据源：`if ($?)` 会被前面任何 `-ErrorAction SilentlyContinue` 的失败打成 false（本项目据此误判过自动登录没写进去）；`cscript //b slmgr.vbs /dli` 在非控制台管道里一个字符都不吐，激活状态只能用 `Get-CimInstance SoftwareLicensingProduct` 的 `LicenseStatus`（1=已授权）判。
 - 从 guest 读回来的字符串先 `tr -d '\r'` 再比较。Windows 回 CRLF，命令替换只吃换行不吃回车符，于是精确等值比较永远失败而子串 grep 一切正常；这类 bug 只会表现为明明成功了却每轮重复执行。
 - 传给 guest 的值先过字符白名单，再动任何写操作；白名单用 `grep -qE '^[A-Za-z0-9._@-]+$'`（正则写死成字面量、值走 stdin）。bash `case` 的字符类不能从变量取允许集：引号包住的 `A-Z` 在字符类里只匹配字面 A、-、Z，正常用户名反而被拒绝。

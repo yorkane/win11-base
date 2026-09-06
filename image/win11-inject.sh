@@ -12,7 +12,8 @@
 #   WIN11_INIT_PASSWORD  password currently on the disk (default: aigc)
 #   WIN11_GUEST_IP       skip discovery and use this address
 #   WIN11_INJECT_TIMEOUT seconds to wait for the guest (default: 900)
-#   WIN11_DESKTOP        off -> keep the stock desktop (icons + taskbar visible)
+#   WIN11_DESKTOP        off -> keep the stock desktop (icons, centered taskbar, search)
+#   WIN11_CHROME         off -> skip the Chrome Enterprise install + policies
 #   WIN11_CLIP           off -> skip the vdagent clipboard bridge (browser <-> guest)
 #   WIN11_MSPC           off -> skip the midscene-pc API server (default: on if payload present)
 #   WIN11_MSPC_TOKEN     token for the API on :3333. Empty = bind guest loopback only.
@@ -260,21 +261,24 @@ fi
 #  the desktop/mspc pushes below.)
 
 # ---------------------------------------------------------------- desktop look
-# Black background, no desktop icons, taskbar auto-hidden. Two of the three are plain
-# HKCU registry values and stick forever; the taskbar switch exists only as runtime
-# state on this build (the StuckRects3 registry route is measurably dead), so it has
-# to be replayed after every boot by a logon task. Both scripts therefore run from
-# one Interactive/Highest task in the console session: SYSTEM and sshd children live
-# in session 0, where FindWindow('Shell_TrayWnd') returns 0 and the call no-ops.
+# Black background, no desktop icons, taskbar ALWAYS VISIBLE with icons left-aligned,
+# no search box, no Store pin. Left-align/search/NoDesktop/Store-unpin are plain HKCU
+# writes in w11_desktop.ps1 (Store unpin = AppsFolder verb; TaskbarDa does nothing on
+# 26100, measured); the always-visible switch exists only as runtime state on this
+# build (the StuckRects3 registry route is measurably dead), so it has to be replayed
+# after every boot by a logon task -- tb_ensure_shown.ps1, the pixel-calibrated ladder.
+# Both scripts run from one Interactive/Highest task in the console session: SYSTEM and
+# sshd children live in session 0, where FindWindow('Shell_TrayWnd') returns 0 and the
+# call no-ops, and an explorer restart from there loses the taskbar entirely.
 if [ "$DESKTOP" != "off" ]; then
-  say "applying desktop look (black, no icons, taskbar auto-hide)"
+  say "applying desktop look (black, no icons, taskbar visible/left, no search, no store pin)"
   ps_run "$CUR_USER" "$CUR_PASS" "$IP" 'New-Item -ItemType Directory -Path C:\ProgramData\w11 -Force | Out-Null; Write-Output DIR_OK' >/dev/null
   push_asset w11_desktop.ps1
-  push_asset tb_ensure_hidden.ps1
+  push_asset tb_ensure_shown.ps1
 
   # cmd wrapper + bat so the task leaves a log behind; the bat is echoed back because a
   # mangled bat silently loses arguments in this stack (WeChat install incident).
-  desk_script='$d="C:\ProgramData\w11"; $b=$d+"\deskhide.bat"; $l=$d+"\deskhide.log"; $s=@(); $s+=("@echo off"); $s+=("powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File " + $d + "\w11_desktop.ps1 > " + $l + " 2>&1"); $s+=("powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File " + $d + "\tb_ensure_hidden.ps1 >> " + $l + " 2>&1"); $s+=("echo DONE_EXIT=%ERRORLEVEL% >> " + $l); Set-Content -Path $b -Value $s -Encoding ASCII; Get-Content $b | ForEach-Object { Write-Output ("BATHASH[" + $_ + "]") }; Write-Output BAT_OK'
+  desk_script='$d="C:\ProgramData\w11"; $b=$d+"\deskhide.bat"; $l=$d+"\deskhide.log"; $s=@(); $s+=("@echo off"); $s+=("powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File " + $d + "\w11_desktop.ps1 > " + $l + " 2>&1"); $s+=("powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File " + $d + "\tb_ensure_shown.ps1 >> " + $l + " 2>&1"); $s+=("echo DONE_EXIT=%ERRORLEVEL% >> " + $l); Set-Content -Path $b -Value $s -Encoding ASCII; Get-Content $b | ForEach-Object { Write-Output ("BATHASH[" + $_ + "]") }; Write-Output BAT_OK'
   out=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" "$desk_script")
   printf '%s' "$out" | grep -q 'BAT_OK' || { say "ERROR: deskhide.bat not written"; exit 1; }
   printf '%s' "$out" | tr -d '\r' | grep -o 'BATHASH\[.*\]' | while read -r l; do say "  $l"; done
@@ -286,6 +290,46 @@ if [ "$DESKTOP" != "off" ]; then
     APPLIED="$APPLIED desktop"
   else
     say "WARNING: logon task not registered: $(printf '%s' "$out" | tr '\n' ' ')"
+  fi
+fi
+
+# ---------------------------------------------------------------- chrome
+# Chrome Enterprise offline MSI + HKLM policies (no sign-in dialog, no translate
+# prompt, straight to the new tab page). WIN11_CHROME=off opts out. The payload hash
+# marker (C:\chrome\.chrome-version) makes repeat starts a few-seconds no-op.
+CHROME="${WIN11_CHROME:-on}"
+if [ "$CHROME" != "off" ] && [ -f /usr/local/share/win11/ChromeEnt64.msi ]; then
+  say "ensuring Chrome (offline enterprise MSI + policies)"
+  CHROME_VERSION=$(sha256sum /usr/local/share/win11/ChromeEnt64.msi | cut -c1-12)
+  push_asset chrome_install.ps1
+  have=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" '$m = ""; if (Test-Path "C:\chrome\.chrome-version") { $m = (Get-Content "C:\chrome\.chrome-version" -First 1).Trim() }; $e = Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe"; Write-Output ("MARKER=" + $m + " EXE=" + $e)')
+  if printf '%s' "$have" | grep -q "MARKER=$CHROME_VERSION EXE=True"; then
+    say "chrome $CHROME_VERSION already installed"
+    APPLIED="$APPLIED chrome"
+  else
+    # 159 MB travels over scp (base64-inlined one-liners are for KB-sized assets only).
+    printf '%s' "$CUR_PASS" > /tmp/.chrome_pw; chmod 600 /tmp/.chrome_pw
+    sshpass -f /tmp/.chrome_pw scp -P 22 -q $SSH_OPTS -o StrictHostKeyChecking=no \
+      /usr/local/share/win11/ChromeEnt64.msi "$CUR_USER@$IP:C:/ProgramData/w11/ChromeEnt64.msi"
+    scp_rc=$?; rm -f /tmp/.chrome_pw
+    [ $scp_rc -eq 0 ] || { say "ERROR: chrome payload push failed (rc=$scp_rc)"; exit 1; }
+    # SYSTEM + ServiceAccount: msiexec machine-wide install is denied to the
+    # UAC-filtered SSH token (the OpenSSH capability lesson again).
+    reg='if (Test-Path C:\ProgramData\w11\chrome-install.log) { Remove-Item C:\ProgramData\w11\chrome-install.log -Force }; $null = Register-ScheduledTask -TaskName w11Chrome -Action (New-ScheduledTaskAction -Execute cmd.exe -Argument "/c powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\w11\chrome_install.ps1 > C:\ProgramData\w11\chrome-once.log 2>&1") -Principal (New-ScheduledTaskPrincipal -UserId SYSTEM -LogonType ServiceAccount -RunLevel Highest) -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10)) -Force; Start-ScheduledTask -TaskName w11Chrome; Write-Output CHROME_ONESHOT_STARTED'
+    ps_run "$CUR_USER" "$CUR_PASS" "$IP" "$reg" | grep -q CHROME_ONESHOT_STARTED || { say 'ERROR: chrome install task not started'; exit 1; }
+    i=0
+    v=""
+    while [ $i -lt 36 ]; do
+      i=$((i+1)); sleep 5
+      v=$(ps_run "$CUR_USER" "$CUR_PASS" "$IP" 'Get-Content C:\ProgramData\w11\chrome-once.log -ErrorAction SilentlyContinue | Select-Object -Last 3')
+      if printf '%s' "$v" | grep -q 'CHROME_INSTALLED'; then say "chrome installed"; APPLIED="$APPLIED chrome"; break; fi
+      if printf '%s' "$v" | grep -q 'CHROME_SKIPPED'; then say "chrome installed (marker already on disk)"; APPLIED="$APPLIED chrome"; break; fi
+      if printf '%s' "$v" | grep -q 'CHROME_FAILED'; then say "ERROR: chrome install failed: $v"; exit 1; fi
+    done
+    if ! printf '%s' "$v" | grep -qE 'CHROME_INSTALLED|CHROME_SKIPPED|CHROME_FAILED'; then
+      say "WARNING: chrome install produced no verdict in time (last: $v)"
+    fi
+    ps_run "$CUR_USER" "$CUR_PASS" "$IP" '$null = Unregister-ScheduledTask -TaskName w11Chrome -Confirm:$false' >/dev/null 2>&1
   fi
 fi
 

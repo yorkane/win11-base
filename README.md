@@ -10,11 +10,16 @@ run time from your local `.env` and are not part of the image.
 - Tiny11 Core 25H2 English (Windows 11 Pro), KMS-activated, renews every 7 days online
 - One local administrator account, SSH shell is PowerShell
 - OpenSSH Server (Microsoft portable build) on port 22, `sshd` = Running/Automatic
--- Solid black desktop: no wallpaper files, no lock-screen image, no desktop icons,
-   and the taskbar auto-hides (re-applied at every logon by the `w11DeskHide` task;
-   set `WIN11_DESKTOP=off` to keep the stock desktop)
-- `C:\activate.bat` for re-activation; no third-party software installed (the window API
-  below runs on a self-contained `node.exe` inside `C:\mspc`, not an installed runtime)
+-- Solid black desktop: no wallpaper files, no lock-screen image, no desktop icons.
+   The taskbar stays **always visible** with icons **left-aligned**, no search box
+   and no Store pin (re-applied at every logon by the `w11DeskHide` task;
+   `WIN11_DESKTOP=off` keeps the stock desktop)
+- Google Chrome (Enterprise offline MSI) with policies that skip the sign-in prompt
+  and the translation bubble and land straight on the new-tab page
+  (`WIN11_CHROME=off` skips the install). Nothing else third-party is installed
+  (the window API below runs on a self-contained `node.exe` inside `C:\mspc`,
+  not an installed runtime)
+- `C:\activate.bat` for re-activation
 - Optional window-level AI API (midscene-pc): HTTP on guest `:3333`, started as the
   `mspcServer` logon task, reachable through the published port when a token is set
 - Two-way clipboard between the browser (noVNC) and the Windows console: Ctrl+C/Ctrl+V
@@ -63,7 +68,8 @@ only); `.gitignore` keeps the real `.env` out of git. Give it mode 600.
 | `WIN11_INIT_USER` / `WIN11_INIT_PASSWORD` | credential currently on the disk, default `aigc`/`aigc` |
 | `WIN11_GUEST_IP` | skip guest discovery and use this address |
 | `WIN11_INJECT_TIMEOUT` | seconds to wait for the guest, default 900 |
-| `WIN11_DESKTOP` | `off` keeps the stock desktop; default applies black background, no icons, auto-hidden taskbar |
+| `WIN11_DESKTOP` | `off` keeps the stock desktop; default applies black background, no icons, always-visible taskbar (left-aligned, no search, no Store pin) |
+| `WIN11_CHROME` | `off` skips the Chrome Enterprise install (offline MSI + sign-in/translate/new-tab policies) |
 | `WIN11_RAM_SIZE` / `WIN11_CPU_CORES` / `WIN11_DISK_SIZE` | VM sizing |
 | `WIN11_CLIP` | `off` disables the browser<->VM clipboard bridge (no vdagent install, no virtio-serial device) |
 | `WIN11_MSPC` | `off` skips the window API; default deploys it (adds ~80 MB to the image, unpacked on first boot) |
@@ -84,8 +90,8 @@ The sealed disk carries the well-known initial credential `aigc`/`aigc`, in the 
 dockur ships `admin`/`admin`. On startup a hook waits for the guest to offer SSH, logs in
 with that credential (or the `WIN11_INIT_*` pair you supply), renames the account, sets the
 new password, keeps the auto-logon registry in step, activates against your KMS host,
-rewrites `C:\activate.bat`, and reboots the guest once so the console logs in
-unattended. It runs on every start and is idempotent: when the volume already matches the
+rewrites `C:\activate.bat`, applies the desktop look, installs Chrome (policies
+included), and reboots the guest once so the console logs in unattended. It runs on every start and is idempotent: when the volume already matches the
 requested state, nothing changes and the guest is not rebooted.
 
 **Always set `WIN11_USER` and `WIN11_PASSWORD`.** Without them the machine stays on the
@@ -93,8 +99,9 @@ public initial credential, and anyone who can reach port 22 or RDP has the passw
 
 ## Size
 
-About 5.6 GB compressed: 569 MB of dockur base plus a 4.99 GB compressed qcow2 holding
-9.4 GB of used NTFS.
+About 5.8 GB compressed: 569 MB of dockur base, a 4.99 GB compressed qcow2 holding
+9.4 GB of used NTFS, plus 159 MB of Chrome Enterprise MSI and ~80 MB of window-API
+payload (both unpacked into the guest on first boot).
 
 ## Repository layout
 

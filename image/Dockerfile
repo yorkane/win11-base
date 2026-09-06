@@ -16,12 +16,18 @@ COPY mspc/mspc-payload.tar.gz /usr/local/share/win11/mspc-payload.tar.gz
 # official spice-guest-tools on a Windows box. Same rule as node: win32 binaries cannot
 # be produced here. QEMU speaks the other end of this channel (see start.sh).
 COPY vda/vda-payload.tar.gz /usr/local/share/win11/vda-payload.tar.gz
+# Chrome Enterprise offline MSI (~159 MB, google 152 x64): the only third-party software
+# this image ships (user decision 2026-09-06). Offline package by design -- the guest may
+# have no network when the injector runs. Payload-hash marker makes installs idempotent.
+COPY chrome/ChromeEnt64.msi /usr/local/share/win11/ChromeEnt64.msi
 COPY win11-inject.sh /usr/local/bin/win11-inject
 # Guest-side assets the injector pushes into C:\ProgramData\w11 at every start:
-# the desktop-look pass and the measured taskbar ladder (see win11_init.md).
+# the desktop-look pass and the measured taskbar ladder (see win11_init.md: the registry
+# route is dead, pixels are the only judge). tb_ensure_shown keeps the taskbar ALWAYS
+# VISIBLE (mirror of the old hidden ladder, same calibration discipline).
 # w11_mspc.ps1 + its JSON template configure the midscene-pc API server in the guest.
 # vda_install.ps1 wires up the browser <-> Windows clipboard bridge (with vda payload).
-COPY w11_desktop.ps1 tb_ensure_hidden.ps1 w11_mspc.ps1 mspc-args.json.template vda_install.ps1 /usr/local/share/win11/
+COPY w11_desktop.ps1 tb_ensure_shown.ps1 w11_mspc.ps1 mspc-args.json.template vda_install.ps1 chrome_install.ps1 /usr/local/share/win11/
 # dockur sources /run/start.sh as its very first action inside /run/entry.sh and invites
 # exactly this override. The hook detaches the injector, so Windows boots in parallel with
 # the wait loop instead of being delayed by it.
@@ -30,7 +36,6 @@ COPY start.sh /run/start.sh
 # The RUN rewrites vnc.html once; a later COPY of a file is layer-cheap when unchanged.
 COPY novnc/w11-clip-bridge.js /usr/share/novnc/w11-clip-bridge.js
 COPY novnc/patch-novnc.sh /usr/local/bin/novnc-patch
-
 RUN chmod 755 /usr/local/bin/win11-inject /run/start.sh /usr/local/bin/novnc-patch \
  && /usr/local/bin/novnc-patch \
  && apt-get update \

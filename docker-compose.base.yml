@@ -4,7 +4,7 @@
 name: win11-base
 services:
   windows:
-    image: ghcr.io/yorkane/win11-base:latest
+    image: ${WIN11_IMAGE:-ghcr.io/yorkane/win11-base:latest}
     container_name: ${WIN11_CONTAINER_NAME:-win11-base}
     hostname: ${WIN11_CONTAINER_NAME:-win11-base}
     environment:
@@ -20,8 +20,10 @@ services:
       WIN11_KMS_KEY: "${WIN11_KMS_KEY:-}"
       WIN11_GUEST_IP: "${WIN11_GUEST_IP:-}"
       WIN11_INJECT_TIMEOUT: "${WIN11_INJECT_TIMEOUT:-900}"
-      # 桌面形态：纯黑+无图标+任务栏自动隐藏；off 保持原样
+      # 桌面形态：纯黑+无图标+任务栏常显（图标左对齐、无搜索框、无商店图标）；off 保持原样
       WIN11_DESKTOP: "${WIN11_DESKTOP:-on}"
+      # Chrome Enterprise（离线 MSI + 策略：无登录框/无翻译提示，直达新标签页）；off 跳过
+      WIN11_CHROME: "${WIN11_CHROME:-on}"
       # 剪贴板桥：浏览器 noVNC <-> Windows 控制台双向复制粘贴（vdagent）；off 关闭
       WIN11_CLIP: "${WIN11_CLIP:-on}"
       # midscene-pc 窗口级 AI API（guest :3333）；WIN11_MSPC=off 关闭
