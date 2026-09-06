@@ -14,14 +14,15 @@
 //   4. panel Send button routed through the clipboard channel (fork made it type
 //      ASCII keystrokes via rfb.sendText otherwise)
 //   5. IME bar (Ctrl+Alt+M): the GUEST has no input method and Tiny11 cannot install
-//      one; users type with the BROWSER-side IME. Enter pushes the composed text via
-//      the clipboard channel, closes the bar and hands focus back to the VM -- the
-//      composing, Enter sends it AND pastes it at the caret in the VM (2026-09-06:
-//      auto-paste works now that the stuck-modifier bug is fixed; 250ms is the
-//      measured floor, 500ms is the shipped default). Focus
-//      routing is plain browser semantics: composing keeps focus in the box, a click
-//      on the canvas hands the keyboard back to the VM. The bridge NEVER swallows
-//      keys or grabs focus outside the box (v7.1 -- imeGuard caused VM keyboard loss).
+//      one; users type with the BROWSER-side IME. Enter sends the composed text AND
+//      pastes it at the caret in the VM (2026-09-06: auto-paste works now that the
+//      stuck-modifier bug is fixed; 250ms is the measured floor, 500ms shipped).
+//      The bar STAYS OPEN after Enter so a user can keep composing phrase after
+//      phrase; it closes only on demand: the close button, Ctrl+Alt+M again, or Esc.
+//      Focus routing is plain browser semantics: composing keeps focus in the box, a
+//      click on the canvas hands the keyboard back to the VM. The bridge NEVER
+//      swallows keys or grabs focus outside the box (v7.1 -- imeGuard caused VM
+//      keyboard loss).
 (function () {
   "use strict";
   var lastSent = null;
@@ -96,7 +97,7 @@
     barInput.id = "w11-ime-input";
     barInput.setAttribute("lang", "zh-Hans");
     barInput.autocomplete = "off";
-    barInput.placeholder = "本地输入法组词，回车直接粘贴到 VM 光标处";
+    barInput.placeholder = "本地输入法组词，回车粘贴到 VM 光标处（可连续输入，关闭点右侧按钮或 Ctrl+Alt+M）";
     barInput.style.cssText = "width:340px;padding:4px 6px;border:1px solid #666;border-radius:4px;background:#111;color:#fff;";
     var bs = "padding:4px 8px;border:1px solid #666;border-radius:4px;background:#2a2a2a;color:#eee;cursor:pointer;";
     var only = document.createElement("button");
@@ -104,13 +105,19 @@
     only.textContent = "粘贴 (Enter)";
     only.style.cssText = bs;
     only.addEventListener("click", function () { imeSubmit(); });
+    var close = document.createElement("button");
+    close.id = "w11-ime-close";
+    close.textContent = "关闭";
+    close.title = "关闭输入条（也可按 Ctrl+Alt+M 或 Esc）";
+    close.style.cssText = "padding:4px 8px;border:1px solid #666;border-radius:4px;background:#3a2020;color:#f0d0d0;cursor:pointer;";
+    close.addEventListener("click", function () { imeClose(); });
     barInput.addEventListener("keydown", function (e) {
       // 组词期间（isComposing / keyCode 229）的回车属于输入法候选键，不能当发送
       if (e.isComposing || e.keyCode === 229) return;
       if (e.key === "Enter") { e.preventDefault(); imeSubmit(); }
       else if (e.key === "Escape") { e.preventDefault(); imeClose(); }
     });
-    bar.appendChild(barInput); bar.appendChild(only);
+    bar.appendChild(barInput); bar.appendChild(only); bar.appendChild(close);
     document.body.appendChild(bar);
     return bar;
   }
@@ -153,9 +160,21 @@
         try { r.sendKey(0x76, "KeyV", false); } catch (e) {}
         setTimeout(function () {
           try { r.sendKey(0xffe3, "ControlLeft", false); } catch (e) {}
+          // Composing must be able to continue, so hand focus back to the box --
+          // but only AFTER the strike has been delivered (refocusing earlier would
+          // send the browser's own Ctrl+V to the page instead of the guest).
+          try { if (barInput) barInput.focus(); } catch (e) {}
         }, 40);
       }, 40);
     }, 60);
+  }
+  // Keep the caret where the user left it: blurring the box and forcing canvas focus
+  // does NOT give the guest app its text cursor back (measured: with the bar staying
+  // open, that hand-off made phrases stop landing entirely). The strike is a raw RFB
+  // key event, so it goes to the guest regardless of which browser element has
+  // focus -- what actually matters is that the guest still has its caret there.
+  function strikeWithFocusHandoff() {
+    pasteStrike();
   }
   function imeSubmit() {
     var r = rfb();
@@ -166,12 +185,14 @@
     // Single claim (a re-NOTIFY restarts the ~1s QEMU->vdagent delivery cycle -- the
     // old ladder is what made pastes empty or late).
     try { r.clipboardPasteFrom(t); } catch (e) {}
+    // Stay open after sending: the user composes and presses Enter for each phrase.
+    // The bar closes only on demand -- close button, Ctrl+Alt+M, or Escape.
     barInput.value = "";
-    imeClose();
+    try { barInput.focus(); } catch (e) {}
     // 250ms is the measured floor (150ms strikes before the guest serves the new
     // bytes and pastes the previous clipboard); 500ms keeps margin without feeling
     // slow. Single strike -- a retry would double-paste once the first lands.
-    setTimeout(pasteStrike, window.__W11_PASTE_DELAY || 500);
+    setTimeout(strikeWithFocusHandoff, window.__W11_PASTE_DELAY || 500);
   }
 
   // ---- hotkey --------------------------------------------------------------
