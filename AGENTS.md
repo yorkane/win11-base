@@ -15,6 +15,7 @@
 | Win11 里传文件 / 回收日志 | SMB：宿主 `shared/` = VM `\\host.lan\Data` | VM 内的 `Z:` 盘符（脚本上下文里不可靠） |
 | 必须点 GUI 才有结果的操作 | `scripts/agent-run.sh z.bat`（midscene RDP + 视觉模型） | 键盘盲打长文件名 |
 | 驱动浏览器做页面级任务（打开网站/搜索/点链接） | `playwright-cli attach --cdp=http://127.0.0.1:<CDP口>` 接管 guest Chrome，再带 `-s=<session>` 下 `find/fill/click/eval/tab-list`（全文本取证，不出图） | `close`（会关 guest 浏览器；断开用 `detach`）；或自写 puppeteer-core（见 deploy.md §6.8）
+| 日常操作（装/卸软件、开 GUI、传文件、扩盘、往剪贴板塞中文） | 仓库技能 skills/win11-daily/： python3 skills/win11-daily/scripts/w11.py install|open|save|pull|disk|clip|apps|run（凭据走 .env + WIN11_SSH_PORT） | 手搓 ssh/scp/ScheduledTask；给基础镜像实例用 SMB |
 | 目视验证桌面 | `scripts/vnc_shot.py` 生成 PNG，再在 exec 内 `await tools.view_image({path})`（约 1s 出全帧）；**多实例时先把脚本里写死的 `localhost:8006` 改成目标实例的 VNC 口**（否则截到别人的桌面，已踩过） | 顶层调用 view_image；把 base64 塞进命令输出；**用 RDP 截图看桌面**（见 §1.3） |
 
 ### 1.1 看图（本轮真实教训）

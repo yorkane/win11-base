@@ -76,4 +76,6 @@ Chrome CDP 19222（仅宿主回环），容器名 w11-13389。要一台端口再
 - 一次性验收：`psx.py ~/.codex/skills/win11-docker/scripts/verify.ps1`（激活、纯黑桌面、sshd、activate.bat）
 - 目视验证只用 `scripts/vnc_shot.py`；别用 RDP 截图（一连就抢占控制台、把桌面打到锁屏）
 - 停机保留 2 分钟优雅期，强杀可能损坏 NTFS；`windows.*` 是安装态身份，删了会触发重装
+- 日常 agent 操作（装/卸软件、开 GUI、传文件、扩 C 盘/加数据盘、往剪贴板塞中文）走仓库技能 win11-daily：先 `bash scripts/install_skill.sh`，再 `python3 skills/win11-daily/scripts/w11.py <verb>`（子命令与红线见 SKILL.md，全部子命令实测通过）
+- 第二块数据盘：compose 叠加 `-f docker-compose.disk2.yml`（`.env` 里 `WIN11_DISK2_SIZE`，guest 里新盘是 RAW，`w11.py disk --apply` 自动初始化成 D:）
 - 把运行中的实例固化成基础镜像：`bash ~/.codex/skills/win11-docker/scripts/to_base_image.sh [实例目录]`

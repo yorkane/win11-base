@@ -1,0 +1,12 @@
+# 第二块数据盘试验（override：docker compose -f docker-compose.base.yml -f docker-compose.disk2.yml）
+# dockur 原生支持 DISK2_SIZE + /storage2（/run/disk.sh: DISK2_FILE=/storage2/data2.img，DISK2_SIZE 为空则完全跳过）
+# 卷可换宿主 bind：-v /data/w11disk2:/storage2 就能把盘放到任意大容量本地分区
+services:
+  windows:
+    environment:
+      DISK2_SIZE: "${WIN11_DISK2_SIZE:-32G}"
+    volumes:
+      - win11-storage2:/storage2
+
+volumes:
+  win11-storage2:

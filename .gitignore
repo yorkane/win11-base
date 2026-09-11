@@ -8,3 +8,4 @@ image/vda/*.tar.gz
 # https://dl.google.com/edgedl/chrome/install/GoogleChromeStandaloneEnterprise64.msi
 # (payload hash marker 1c555a95c691 = v152.0.7977.83); it ships in the image, not git.
 image/chrome/*.msi
+__pycache__/
