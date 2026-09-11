@@ -71,7 +71,7 @@ python3 $W status                                         # 先确认：控制�
 7. **session 0 的剪贴板是另一个站点**：`clip` 走 Interactive 任务 + 脚本自写日志（任务 action 带
    `> 同一日志` 的重定向会让那次写变成 0 字节，实测）。
 8. **装完 ≠ 装好**：判据 = `apps` 有条目 或 marker 命中；起没起窗口 = `SESS1=` 或截图。
-   看桌面永远用 vnc_shot（仓库版写死 8006，多实例先改端口），
+   看桌面永远用本技能自带的 scripts/vnc_shot.py（WIN11_VNC_PORT 指实例口，见「目视验证」），
    **绝不用 RDP 截图**（一连就锁屏抢控制台）。
  
 ## 装 Chrome 这类大包
@@ -111,8 +111,20 @@ playwright-cli -s=w11 tab-list   # 之后 detach：断开用 detach，close 会�
 - `w11CdpChrome` 任务本身就是看门狗（chrome 掉了 supervisor 15s 内重拉）：chrome 被 kill 后跑一次 `w11.py chrome` 即整队复活（实测 DOWN→UP→开标签一轮过），**别去注销这个任务**。
 - 页面上要人眼确认时才截 VNC 图；纯数据取证一律 eval 文本（对齐仓库惯例：不出图）。
 
+## 目视验证（技能自带 vnc_shot.py，除 websocket+PIL 零外部依赖）
+
+唯一安全的看桌面通道：一条 websocket 做 RFB 只读抓帧，不建会话不动输入，约 1s 出全帧。
+绝不用 RDP 截图：RDP 一连就抢占控制台并锁屏，截到的永远是锁屏图（先污染再观测，实测曾据此误判过壁纸）。
+
+```bash
+export WIN11_VNC_PORT=18006   # 目标实例的宿主 VNC 发布口（错了会截到别人桌面，实测踩过）
+python3 skills/win11-daily/scripts/vnc_shot.py  /tmp/shot.png   # 或第一个参数直接传 ws://127.0.0.1:<口>/websockify
+```
+
+判据：输出 size WxH、pixels == expected、saved <path>。取图在 exec isolate 内
+`await tools.view_image({path, detail:'high'})` + `image(...)` 交付；禁顶层调工具、禁 base64 走命令输出。任务栏/桌面形态判据只认帧底部像素。
 ## 与既有体系的关系
  
 - 装机 / 转基础镜像 / 多实例编排 / 桌面形态阶梯 → README/AGENTS.md。
 - 本项目注入器已把 Chrome/CDP/剪贴板桥做成出厂能力，日常操作**不需要**再碰注入器。
-- 看图：`vnc_shot.py ws://127.0.0.1:<vnc口>/websockify /tmp/x.png`，再在 exec isolate 内 `await tools.view_image({path})`。
+- 目视验证用本技能自带的 scripts/vnc_shot.py（WIN11_VNC_PORT 定实例 VNC 口），取图后在 exec isolate 内 `await tools.view_image({path})`。

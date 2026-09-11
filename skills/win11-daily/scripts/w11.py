@@ -276,7 +276,7 @@ def cmd_pull(a):
 
 def cmd_clip(a):
     # 把文本送进【控制台会话】的剪贴板：sshd 子进程在 session 0，那里的剪贴板是另一个站点，
-    # Set-Clipboard 直接跑 = 用户 Ctrl+V 粘贴不到东西（win11_init.md 第 12 节）。
+    # Set-Clipboard 直接跑 = 用户 Ctrl+V 粘贴不到东西。
     # 文本经 scp 进 C:\\Temp\\w11clip.txt（免引号/换行转义），再由 Interactive 一次性任务执行资产脚本。
     if len(a) < 1:
         sys.exit("usage: w11.py clip <local text file | - >")
