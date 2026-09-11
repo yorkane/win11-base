@@ -27,6 +27,7 @@ SSH + powershell -EncodedCommand（utf-16le + base64），文件传输一律 scp
   save <本地> <guest绝对路径>              scp 上传 + SHA256 回读校验（SAVE_OK）
   pull <guest绝对路径> <本地>              scp 取回 + 两边哈希对照
   disk [--apply]                          虚拟盘/分区/剩余体检；--apply 把 C 吃满（免重启）
+  chrome [URL ...]                       确保 CDP 端点存活（宿主口 WIN11_CDP_PORT，默认 19222）；带 URL 开标签页；--tabs 列表
   status                                  会话、sshd、开机时间、剩余空间、桌面进程
 
 装完不等于装好：验收 = apps 里出现该条目，或 marker 文件存在。装没装上图标/起没起窗口，
@@ -275,7 +276,7 @@ def cmd_pull(a):
 
 def cmd_clip(a):
     # 把文本送进【控制台会话】的剪贴板：sshd 子进程在 session 0，那里的剪贴板是另一个站点，
-    # Set-Clipboard 直接跑 = 用户 Ctrl+V 粘贴不到东西。
+    # Set-Clipboard 直接跑 = 用户 Ctrl+V 粘贴不到东西（win11_init.md 第 12 节）。
     # 文本经 scp 进 C:\\Temp\\w11clip.txt（免引号/换行转义），再由 Interactive 一次性任务执行资产脚本。
     if len(a) < 1:
         sys.exit("usage: w11.py clip <local text file | - >")
@@ -389,8 +390,57 @@ def cmd_status(_a):
                         "Write-Output ('SESS1_APPS=' + ((Get-Process | Where-Object SessionId -EQ 1 | Select-Object -First 12).Name -join ','))"))
 
 
+def cmd_chrome(a):
+    # Chrome CDP endpoint (default deploy): guest chrome binds 127.0.0.1:9223, an elevated
+    # netsh portproxy holds 0.0.0.0:9222, compose publishes 127.0.0.1:WIN11_CDP_PORT (default 19222).
+    # This subcommand: probe host /json/version -> if down, Start-ScheduledTask w11CdpChrome and
+    # wait; then open each URL as a new tab (PUT /json/new). The authoritative check is host-side.
+    import json, urllib.parse, urllib.request
+    port = os.environ.get("WIN11_CDP_PORT", "19222")
+    base = "http://127.0.0.1:" + port
+
+    def rq(path, method=None, timeout=6):
+        req = urllib.request.Request(base + path, method=method)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+
+    def version():
+        try:
+            return rq("/json/version")
+        except Exception:
+            return None
+
+    v = version()
+    if v is None:
+        sys.stdout.write("CDP_DOWN -> run task w11CdpChrome" + chr(10))
+        ps("Start-ScheduledTask -TaskName w11CdpChrome -ErrorAction SilentlyContinue;"
+           "Write-Output ('TASKSTATE=' + (Get-ScheduledTask -TaskName w11CdpChrome -ErrorAction SilentlyContinue | Where-Object TaskName).State)",
+           check=False)
+        for _ in range(20):
+            time.sleep(3)
+            v = version()
+            if v is not None:
+                break
+    if v is None:
+        sys.exit("CDP_STILL_DOWN: check docker logs (grep -i cdp) and guest C:/ProgramData/w11/cdp.log; WIN11_CDP=off disables the endpoint")
+    sys.stdout.write("CDP=UP Browser=" + str(v.get("Browser", "?")) + " Endpoint=" + base + chr(10))
+    urls = [x for x in a if not x.startswith("--")]
+    if "--tabs" in a:
+        for t in rq("/json/list"):
+            if t.get("type") == "page":
+                sys.stdout.write("TAB|" + t.get("id", "")[:8] + "|" + (t.get("title") or "")[:40] + "|" + (t.get("url") or "")[:90] + chr(10))
+        return
+    if not urls:
+        sys.stdout.write("no URL given: endpoint ready only. drive it: playwright-cli attach --cdp=" + base + " -s=w11" + chr(10))
+        return
+    for u in urls:
+        t = rq("/json/new?" + urllib.parse.quote(u, safe=":/?&="), method="PUT")
+        sys.stdout.write("TAB=" + t.get("id", "") + " URL=" + str(t.get("url", u)) + chr(10))
+
+
 HANDLERS = {"run": cmd_run, "install": cmd_install, "uninstall": cmd_uninstall, "apps": cmd_apps, "clip": cmd_clip,
-            "open": cmd_open, "save": cmd_save, "pull": cmd_pull, "disk": cmd_disk, "status": cmd_status}
+            "open": cmd_open, "save": cmd_save, "pull": cmd_pull, "disk": cmd_disk, "status": cmd_status,
+            "chrome": cmd_chrome}
 
 
 def main():

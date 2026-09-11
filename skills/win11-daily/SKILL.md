@@ -25,6 +25,7 @@ python3 $W status                                         # 先确认：控制�
 | 保存 xxx 文件到虚拟机 | `python3 $W save <本地文件> 'C:\\Users\\<user>\\...\\名'` | `SAVE_OK`（SHA256 双向对过） |
 | 从虚拟机取文件 | `python3 $W pull 'C:\\...\\名' <本地路径>` | 两边 GUESTHASH/LOCALSHA 相同 |
 | 给 guest 送中文/粘贴内容 | `python3 $W clip <文本文件>`（或 `-` 走 stdin） | `CODES=` 里是文本的码点（中文会还原成 20320 这类） |
+| 打开浏览器/网页（CDP 入口） | `python3 $W chrome [URL ...]`（`--tabs` 列页面；宿主口走 `WIN11_CDP_PORT`，默认 19222） | `CDP=UP Browser=Chrome/x`；驱动见「Chrome 与 CDP」一节 |
 | 查装了啥 | `python3 $W apps` | NAME|VERSION|UninstallString |
 | 跑一段 PowerShell | `python3 $W run x.ps1 [秒]` | 脚本自己打的键值行（别信 echo 完了就完） |
  
@@ -78,8 +79,38 @@ python3 $W status                                         # 先确认：控制�
 `install <ChromeEnterprise.msi> --skip-if 'C:\Program Files\Google\Chrome\Application\chrome.exe' --wait 600`；
 基础镜像本身自带 Chrome 注入（README.md），**先 `apps` 看是不是已经有了再装**。
 打开直接 `open 'C:\Program Files\Google\Chrome\Application\chrome.exe' --new-window <url>`；
-页面级任务不走 GUI，用 CDP：`playwright-cli attach --cdp=http://127.0.0.1:19222`（README.md）。
+CDP 端点探活/拉起/开标签页与 playwright 驱动见「Chrome 与 CDP」一节。
  
+## Chrome 与 CDP（浏览器自动化入口）
+
+基础镜像出厂自带 Chrome + CDP 端点（注入器 `WIN11_CDP=on`，无需安装）。默认部署链路：
+guest chrome 绑 `127.0.0.1:9223`（专用 profile）→ 提权 netsh portproxy 持有 `0.0.0.0:9222` →
+compose 发布 `127.0.0.1:19222:9222`（主实例固定族；w11-test=20222）。宿主口 = `.env` 的 `WIN11_PORT_CDP`，
+`w11.py chrome` 用 `WIN11_CDP_PORT` 指同一口。**CDP 无鉴权，默认只绑宿主回环，别随手 0.0.0.0**。
+
+```bash
+export WIN11_CDP_PORT=19222                    # 必须 = 目标实例的宿主发布口
+python3 $W chrome                              # 探活；端点没起会自动拉起 w11CdpChrome 任务并等（实测 ~20s）
+python3 $W chrome https://example.com          # 顺带开新标签页（可多个 URL）
+python3 $W chrome --tabs                       # 列已开页面：TAB|id|title|url
+```
+
+判据：`CDP=UP Browser=Chrome/<版本>`（宿主侧 `/json/version` 是唯一权威判据，guest 回环看不到 portproxy 那层）。
+`CDP_STILL_DOWN` → `docker logs <容器> | grep -i cdp` + guest `C:\ProgramData\w11\cdp.log`；`WIN11_CDP=off` 的实例没有这条端点。
+
+页面级任务一律 playwright-cli 接管 CDP，不走 GUI 点击（2026-09-11 百度搜索链路实测）：
+
+```bash
+playwright-cli attach --cdp=http://127.0.0.1:$WIN11_CDP_PORT -s=w11
+playwright-cli -s=w11 goto <url>   # 搜索引擎直达结果页 URL（如 baidu /s?wd=...）；fill+Enter 会被搜索建议带偏
+playwright-cli -s=w11 eval '(() => { ... ; return x })()'   # eval 是表达式上下文：裸 const 会炸，必须包 IIFE
+playwright-cli -s=w11 tab-list   # 之后 detach：断开用 detach，close 会关掉 guest 的浏览器
+```
+
+- 点搜索结果：链接是 `link?url=` 跳转链且默认新开标签，会话焦点会丢——先 `setAttribute('target','_self')` 再 click，同标签直达。
+- `w11CdpChrome` 任务本身就是看门狗（chrome 掉了 supervisor 15s 内重拉）：chrome 被 kill 后跑一次 `w11.py chrome` 即整队复活（实测 DOWN→UP→开标签一轮过），**别去注销这个任务**。
+- 页面上要人眼确认时才截 VNC 图；纯数据取证一律 eval 文本（对齐仓库惯例：不出图）。
+
 ## 与既有体系的关系
  
 - 装机 / 转基础镜像 / 多实例编排 / 桌面形态阶梯 → README/AGENTS.md。
